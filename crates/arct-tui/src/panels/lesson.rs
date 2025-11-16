@@ -422,55 +422,51 @@ impl LessonPanel {
                 Span::styled("Welcome to Interactive Lessons!", theme.style_accent()),
             ]),
             Line::from(""),
-            Line::from(vec![Span::styled(
-                "Available lessons:",
-                theme.style_header(),
-            )]),
-            Line::from(""),
             Line::from(vec![
-                Span::styled("  1. ", theme.style_accent()),
-                Span::styled("Navigation Basics", theme.style_normal()),
-                Span::styled(" (10 min) ", theme.style_dim()),
-                icons::beginner(),
-                Span::styled("Beginner", theme.style_success()),
+                Span::styled("🎓 ", theme.style_accent()),
+                Span::styled("10 comprehensive lessons", theme.style_normal()),
+                Span::styled(" available", theme.style_dim()),
             ]),
             Line::from(vec![
-                Span::styled("     ", theme.style_dim()),
-                Span::styled(
-                    "Learn ls, cd, pwd, and tree",
-                    theme.style_dim(),
-                ),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("  2. ", theme.style_accent()),
-                Span::styled("File Management", theme.style_normal()),
-                Span::styled(" (15 min) ", theme.style_dim()),
-                icons::beginner(),
-                Span::styled("Beginner", theme.style_success()),
+                Span::styled("🏆 ", theme.style_accent()),
+                Span::styled("Track progress & earn achievements", theme.style_normal()),
             ]),
             Line::from(vec![
-                Span::styled("     ", theme.style_dim()),
-                Span::styled(
-                    "Create, copy, move, and delete files safely",
-                    theme.style_dim(),
-                ),
+                Span::styled("🛡️  ", theme.style_accent()),
+                Span::styled("Safe virtual filesystem", theme.style_normal()),
+                Span::styled(" for hands-on practice", theme.style_dim()),
             ]),
             Line::from(""),
             Line::from(""),
             Line::from(vec![
-                Span::styled("▶ ", theme.style_accent()),
-                Span::styled(
-                    "Lessons will auto-load when you start the TUI",
-                    theme.style_dim(),
-                ),
+                Span::styled("📚 Select a lesson:", theme.style_header()),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Press ", theme.style_dim()),
+                Span::styled("m", theme.style_accent()),
+                Span::styled(" to open the lesson menu", theme.style_dim()),
             ]),
             Line::from(vec![
-                Span::styled("  ", theme.style_dim()),
-                Span::styled(
-                    "(Lesson selection UI coming soon!)",
-                    theme.style_dim(),
-                ),
+                Span::styled("  Use ", theme.style_dim()),
+                Span::styled("↑/↓", theme.style_accent()),
+                Span::styled(" or ", theme.style_dim()),
+                Span::styled("1-9,0", theme.style_accent()),
+                Span::styled(" to select", theme.style_dim()),
+            ]),
+            Line::from(vec![
+                Span::styled("  Press ", theme.style_dim()),
+                Span::styled("Enter", theme.style_accent()),
+                Span::styled(" to start learning!", theme.style_dim()),
+            ]),
+            Line::from(""),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("💡 Tip: ", theme.style_accent()),
+                Span::styled("Complete lessons to unlock achievements", theme.style_dim()),
+            ]),
+            Line::from(vec![
+                Span::styled("       and build your learning streak!", theme.style_dim()),
             ]),
         ])
         .block(block)
