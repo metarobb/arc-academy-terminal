@@ -295,17 +295,17 @@ impl ContextPanel {
         // Hints for gamification features
         items.push(ListItem::new(Line::from(vec![
             Span::styled("  Press ", theme.style_dim()),
-            Span::styled("a", theme.style_accent()),
+            Span::styled("Alt+A", theme.style_accent()),
             Span::styled(" for achievements", theme.style_dim()),
         ])));
         items.push(ListItem::new(Line::from(vec![
             Span::styled("  Press ", theme.style_dim()),
-            Span::styled("p", theme.style_accent()),
+            Span::styled("Alt+P", theme.style_accent()),
             Span::styled(" for progress", theme.style_dim()),
         ])));
         items.push(ListItem::new(Line::from(vec![
             Span::styled("  Press ", theme.style_dim()),
-            Span::styled("c", theme.style_accent()),
+            Span::styled("Alt+C", theme.style_accent()),
             Span::styled(" for challenges", theme.style_dim()),
         ])));
 
