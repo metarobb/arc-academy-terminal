@@ -168,17 +168,22 @@ impl App {
             arct_config::Config::default()
         });
 
-        // Load command history from disk
-        let command_history = match crate::persistence::load_session() {
-            Ok(session_data) => {
-                tracing::info!("Loaded {} commands from history", session_data.command_history.len());
-                session_data.command_history
+        // Load session data (history, stats, progress) from disk
+        let session_data = match crate::persistence::load_session() {
+            Ok(data) => {
+                tracing::info!("Loaded session with {} commands, {} completed lessons",
+                    data.command_history.len(),
+                    data.completed_lessons.len()
+                );
+                data
             }
             Err(e) => {
-                tracing::warn!("Failed to load session history: {}", e);
-                Vec::new()
+                tracing::warn!("Failed to load session: {}", e);
+                crate::persistence::SessionData::new()
             }
         };
+
+        let command_history = session_data.command_history;
 
         // Load aliases and environment variables from config
         let aliases = config.shell.aliases.clone();
@@ -229,15 +234,18 @@ impl App {
             String::new()
         };
 
-        // Initialize user stats (will be loaded from persistence later)
-        let mut user_stats = arct_core::UserStats::new();
+        // Load user stats from session and update streak
+        let mut user_stats = session_data.user_stats;
         user_stats.update_streak(); // Update streak on app start
 
-        // Initialize challenge manager
-        let mut challenge_manager = arct_core::ChallengeManager::new();
-        // Generate today's challenges
+        // Load challenge manager from session
+        let mut challenge_manager = session_data.challenge_manager;
+        // Generate today's challenges (will use cached if same day/week)
         challenge_manager.get_daily_challenge();
         challenge_manager.get_weekly_challenge();
+
+        // Load completed lessons from session
+        let completed_lessons = session_data.completed_lessons;
 
         Ok(Self {
             should_quit: false,
@@ -275,7 +283,7 @@ impl App {
             lesson_mode: false,
             virtual_fs: None,
             lesson_menu: None,
-            completed_lessons: std::collections::HashSet::new(),
+            completed_lessons,
             user_stats,
             challenge_manager,
             recommendation_engine: arct_core::RecommendationEngine::new(),
@@ -434,8 +442,8 @@ impl App {
         // Main loop
         let result = self.main_loop(&mut terminal).await;
 
-        // Save history before exiting
-        self.save_history();
+        // Save all progress before exiting
+        self.save_session();
 
         // Restore terminal
         disable_raw_mode()?;
@@ -1284,19 +1292,22 @@ impl App {
             self.command_history.truncate(1000);
         }
 
-        // Save to disk
-        self.save_history();
+        // Save all progress to disk
+        self.save_session();
     }
 
-    /// Save command history to disk
-    fn save_history(&self) {
+    /// Save all session data (history, stats, progress) to disk
+    fn save_session(&self) {
         let session_data = crate::persistence::SessionData {
             command_history: self.command_history.clone(),
             last_updated: chrono::Local::now().to_rfc3339(),
+            user_stats: self.user_stats.clone(),
+            completed_lessons: self.completed_lessons.clone(),
+            challenge_manager: self.challenge_manager.clone(),
         };
 
         if let Err(e) = crate::persistence::save_session(&session_data) {
-            tracing::warn!("Failed to save session history: {}", e);
+            tracing::warn!("Failed to save session: {}", e);
         }
     }
 

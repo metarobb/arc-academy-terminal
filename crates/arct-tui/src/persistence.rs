@@ -1,7 +1,9 @@
-//! Session persistence for command history
+//! Session persistence for command history and user progress
 
 use anyhow::Result;
+use arct_core::{ChallengeManager, UserStats};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -10,6 +12,12 @@ use std::path::PathBuf;
 pub struct SessionData {
     pub command_history: Vec<String>,
     pub last_updated: String,
+    /// User statistics and progress (achievements, streaks, lessons completed, etc.)
+    pub user_stats: UserStats,
+    /// Completed lesson IDs
+    pub completed_lessons: HashSet<String>,
+    /// Challenge manager state (daily/weekly challenges completed)
+    pub challenge_manager: ChallengeManager,
 }
 
 impl SessionData {
@@ -17,6 +25,9 @@ impl SessionData {
         Self {
             command_history: Vec::new(),
             last_updated: chrono::Local::now().to_rfc3339(),
+            user_stats: UserStats::new(),
+            completed_lessons: HashSet::new(),
+            challenge_manager: ChallengeManager::new(),
         }
     }
 }
