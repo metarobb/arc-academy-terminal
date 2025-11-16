@@ -717,7 +717,8 @@ impl App {
 
     /// Execute the current command
     async fn execute_command(&mut self) -> Result<()> {
-        if self.command_buffer.is_empty() {
+        // In lesson mode, allow empty commands (for Information steps that just need Enter)
+        if self.command_buffer.is_empty() && !self.lesson_mode {
             return Ok(());
         }
 
