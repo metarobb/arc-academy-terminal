@@ -724,6 +724,48 @@ impl App {
 
         let mut command_str = self.command_buffer.clone();
 
+        // If in lesson mode with empty command, skip parsing and go to validation
+        if self.lesson_mode && command_str.is_empty() {
+            // Extract lesson completion info outside the borrow scope
+            let mut lesson_completed_info: Option<(String, arct_core::Difficulty)> = None;
+
+            if let Some(ref mut lesson_panel) = self.lesson_panel {
+                let validation = lesson_panel.validate_current_step(&command_str);
+
+                if validation.is_success() {
+                    // Success! Move to next step
+                    self.last_output = format!("{}{}\n\nMoving to next step...\n",
+                        icons::success().content,
+                        match &validation {
+                            arct_core::ValidationResult::Success { message } => message,
+                            _ => "Success!",
+                        }
+                    );
+
+                    if !lesson_panel.next_step() {
+                        // Lesson complete! Extract info for later processing
+                        if let Some(lesson) = lesson_panel.current_lesson.as_ref() {
+                            lesson_completed_info = Some((lesson.id.clone(), lesson.difficulty));
+                        }
+                        self.last_output.push_str(&format!("\n{}Congratulations! You've completed this lesson!\n\nPress Ctrl+L to exit lesson mode or 'm' to select another lesson.\n", icons::celebration().content));
+                    }
+                } else {
+                    // Information steps should always succeed with Enter
+                    self.last_output = "Press Enter to continue...\n".to_string();
+                }
+
+                self.command_buffer.clear();
+                self.add_to_history(command_str.clone());
+            }
+
+            // Process lesson completion outside the borrow scope
+            if let Some((lesson_id, difficulty)) = lesson_completed_info {
+                self.record_lesson_completion(lesson_id, difficulty);
+            }
+
+            return Ok(());
+        }
+
         // Parse command
         let cmd = self.analyzer.parse(&command_str)?;
 
