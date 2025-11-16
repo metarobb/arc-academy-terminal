@@ -131,10 +131,10 @@ pub fn key_to_action(key: KeyEvent) -> Action {
         (KeyCode::Char('l'), KeyModifiers::CONTROL) => Action::ToggleLesson,
         (KeyCode::Char('m'), KeyModifiers::NONE) => Action::ShowLessonMenu,
 
-        // Gamification panels
-        (KeyCode::Char('a'), KeyModifiers::NONE) => Action::ShowAchievements,
-        (KeyCode::Char('p'), KeyModifiers::NONE) => Action::ShowProgress,
-        (KeyCode::Char('c'), KeyModifiers::NONE) => Action::ShowChallenges,
+        // Gamification panels (Alt modifier to avoid conflicts with typing)
+        (KeyCode::Char('a'), KeyModifiers::ALT) => Action::ShowAchievements,
+        (KeyCode::Char('p'), KeyModifiers::ALT) => Action::ShowProgress,
+        (KeyCode::Char('c'), KeyModifiers::ALT) => Action::ShowChallenges,
 
         _ => Action::None,
     }

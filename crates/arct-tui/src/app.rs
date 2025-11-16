@@ -552,18 +552,12 @@ impl App {
                 if self.active_panel == PanelId::Shell && !self.show_help && !self.ai_mode {
                     match key.code {
                         KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT => {
-                            // Check if this is a global hotkey (a, p, c for gamification panels)
-                            // Let these fall through to action handler
-                            if c == 'a' || c == 'p' || c == 'c' {
-                                // Fall through to action handler below
-                            } else {
-                                self.command_buffer.push(c);
-                                // Reset history position when typing
-                                self.history_position = None;
-                                // Clear completion suggestions when typing
-                                self.completion_suggestions.clear();
-                                return Ok(());
-                            }
+                            self.command_buffer.push(c);
+                            // Reset history position when typing
+                            self.history_position = None;
+                            // Clear completion suggestions when typing
+                            self.completion_suggestions.clear();
+                            return Ok(());
                         }
                         KeyCode::Backspace => {
                             self.command_buffer.pop();

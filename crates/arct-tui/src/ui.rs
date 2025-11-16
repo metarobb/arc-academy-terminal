@@ -97,9 +97,9 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     };
     let version = format!("v{} | {} | arcacademy.sh ", env!("CARGO_PKG_VERSION"), app.theme.name);
     let help_text = if app.lesson_mode {
-        " [? help] [^L lessons] [m menu] [a achievements] [p progress] [c challenges] [^A AI] [^T theme] [q quit] "
+        " [? help] [^L lessons] [m menu] [Alt+A achievements] [Alt+P progress] [Alt+C challenges] [^A AI] [^T theme] [q quit] "
     } else {
-        " [? help] [^L lessons] [a achievements] [p progress] [c challenges] [^A AI] [^T theme] [q quit] "
+        " [? help] [^L lessons] [Alt+A achievements] [Alt+P progress] [Alt+C challenges] [^A AI] [^T theme] [q quit] "
     };
 
     let title_len = title.len();
