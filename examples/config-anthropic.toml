@@ -1,0 +1,8 @@
+# Arc Academy Terminal - Anthropic (Claude) Configuration Example
+
+[ai]
+enabled = true
+provider = "anthropic"
+api_key = "sk-ant-..."  # Or set ARCT_AI_API_KEY environment variable
+model = "claude-3-5-sonnet-20241022"
+max_tokens = 1000

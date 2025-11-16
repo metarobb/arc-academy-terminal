@@ -1,0 +1,407 @@
+//! Arc Academy Terminal - CLI Entry Point
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const ABOUT: &str = "🎓 Arc Academy Terminal - Learn shell commands interactively";
+
+#[derive(Parser)]
+#[command(name = "arct")]
+#[command(version = VERSION)]
+#[command(about = ABOUT, long_about = None)]
+#[command(author = "Arc Academy")]
+struct Cli {
+    /// Enable verbose logging
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
+    /// Config file path (defaults to ~/.config/arct/config.toml)
+    #[arg(short, long, global = true)]
+    config: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the interactive TUI (default)
+    #[command(visible_alias = "tui")]
+    Start {
+        /// Start with a specific theme
+        #[arg(long)]
+        theme: Option<String>,
+
+        /// Working directory to start in
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
+    /// Quick command explanation (non-interactive)
+    Explain {
+        /// Command to explain
+        command: String,
+    },
+
+    /// Show version information
+    Version,
+
+    /// Show configuration paths and system info
+    Info,
+
+    /// Manage telemetry data
+    Telemetry {
+        #[command(subcommand)]
+        action: TelemetryAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Show current configuration
+    Show,
+
+    /// Edit configuration file
+    Edit,
+
+    /// Reset configuration to defaults
+    Reset {
+        /// Skip confirmation
+        #[arg(short, long)]
+        yes: bool,
+    },
+
+    /// Get configuration file path
+    Path,
+
+    /// Generate default configuration
+    Init {
+        /// Overwrite existing config
+        #[arg(short, long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TelemetryAction {
+    /// Show telemetry statistics
+    Stats,
+
+    /// Export all telemetry data as JSON
+    Export {
+        /// Output file (defaults to stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Delete all telemetry data
+    Delete {
+        /// Skip confirmation
+        #[arg(short, long)]
+        yes: bool,
+    },
+
+    /// Show telemetry database path
+    Path,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    // Initialize tracing based on verbosity
+    let log_level = if cli.verbose { "debug" } else { "info" };
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
+        )
+        .init();
+
+    // Load config if specified
+    if let Some(config_path) = cli.config {
+        tracing::info!("Using config from: {}", config_path.display());
+        // TODO: Pass custom config path to app
+    }
+
+    match cli.command {
+        None | Some(Commands::Start { .. }) => {
+            // Default: run TUI
+            run_tui(cli.command).await?;
+        }
+        Some(Commands::Config { action }) => {
+            handle_config(action)?;
+        }
+        Some(Commands::Explain { command }) => {
+            handle_explain(&command)?;
+        }
+        Some(Commands::Version) => {
+            print_version();
+        }
+        Some(Commands::Info) => {
+            print_info()?;
+        }
+        Some(Commands::Telemetry { action }) => {
+            handle_telemetry(action)?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_tui(command: Option<Commands>) -> Result<()> {
+    // Apply any start options
+    if let Some(Commands::Start { theme, dir }) = command {
+        if let Some(theme_name) = theme {
+            tracing::info!("Starting with theme: {}", theme_name);
+            // TODO: Pass theme to app
+        }
+        if let Some(working_dir) = dir {
+            std::env::set_current_dir(&working_dir)?;
+            tracing::info!("Starting in directory: {}", working_dir.display());
+        }
+    }
+
+    // Run the TUI
+    arct_tui::run().await?;
+
+    Ok(())
+}
+
+fn handle_config(action: ConfigAction) -> Result<()> {
+    match action {
+        ConfigAction::Show => {
+            let config = arct_config::Config::load()?;
+            let toml_str = toml::to_string_pretty(&config)?;
+            println!("{}", toml_str);
+        }
+        ConfigAction::Edit => {
+            let config_path = arct_config::get_config_file_path()?;
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+
+            println!("Opening config in {}...", editor);
+            std::process::Command::new(editor)
+                .arg(&config_path)
+                .status()?;
+        }
+        ConfigAction::Reset { yes } => {
+            if !yes {
+                print!("Reset configuration to defaults? [y/N] ");
+                use std::io::{self, Write};
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
+
+            let config = arct_config::Config::default();
+            config.save()?;
+            println!("✓ Configuration reset to defaults");
+        }
+        ConfigAction::Path => {
+            let config_path = arct_config::get_config_file_path()?;
+            println!("{}", config_path.display());
+        }
+        ConfigAction::Init { force } => {
+            let config_path = arct_config::get_config_file_path()?;
+
+            if config_path.exists() && !force {
+                eprintln!("Config file already exists: {}", config_path.display());
+                eprintln!("Use --force to overwrite");
+                return Ok(());
+            }
+
+            let config = arct_config::Config::default();
+            config.save()?;
+            println!("✓ Created config file: {}", config_path.display());
+        }
+    }
+    Ok(())
+}
+
+fn handle_explain(command_str: &str) -> Result<()> {
+    use arct_core::{CommandAnalyzer, Educator};
+
+    let analyzer = CommandAnalyzer::new();
+    let mut educator = Educator::new();
+
+    let cmd = analyzer.parse(command_str)?;
+    let explanation = educator.explain(&cmd)?;
+
+    println!("\n📚 Command: {}\n", cmd.program);
+    println!("{}\n", explanation.summary);
+
+    if !explanation.flag_explanations.is_empty() {
+        println!("🔍 Flags:");
+        for flag_exp in &explanation.flag_explanations {
+            println!("  {} - {}", flag_exp.flag, flag_exp.description);
+        }
+        println!();
+    }
+
+    if !explanation.warnings.is_empty() {
+        println!("⚠️  Warnings:");
+        for warning in &explanation.warnings {
+            println!("  • {} - {}", warning.severity, warning.message);
+            if let Some(suggestion) = &warning.suggestion {
+                println!("    → {}", suggestion);
+            }
+        }
+        println!();
+    }
+
+    if !explanation.tips.is_empty() {
+        println!("💡 Tips:");
+        for tip in &explanation.tips {
+            println!("  • {} - {}", tip.title, tip.content);
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+fn print_version() {
+    println!("Arc Academy Terminal v{}", VERSION);
+    println!();
+    println!("🌐 arcacademy.sh");
+    println!("📚 Learn shell commands interactively");
+}
+
+fn print_info() -> Result<()> {
+    println!("Arc Academy Terminal - System Info");
+    println!("==================================\n");
+
+    println!("Version:  {}", VERSION);
+    println!();
+
+    // Config paths
+    if let Ok(config_path) = arct_config::get_config_file_path() {
+        println!("Config:   {}", config_path.display());
+        println!("          {}", if config_path.exists() { "exists" } else { "not found" });
+    }
+
+    // Session paths
+    if let Ok(session_path) = arct_tui::persistence::get_session_file_path() {
+        println!("Session:  {}", session_path.display());
+        println!("          {}", if session_path.exists() { "exists" } else { "not found" });
+    }
+
+    println!();
+
+    // System info
+    println!("OS:       {}", std::env::consts::OS);
+    println!("Arch:     {}", std::env::consts::ARCH);
+
+    if let Ok(shell) = std::env::var("SHELL") {
+        println!("Shell:    {}", shell);
+    }
+
+    if let Ok(user) = std::env::var("USER").or_else(|_| std::env::var("USERNAME")) {
+        println!("User:     {}", user);
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        println!("Home:     {}", home);
+    }
+
+    println!();
+    println!("🌐 Website: https://arcacademy.sh");
+    println!("📖 Docs:    https://docs.arcacademy.sh");
+    println!("🐛 Issues:  https://github.com/arc-academy/terminal/issues");
+
+    Ok(())
+}
+
+fn handle_telemetry(action: TelemetryAction) -> Result<()> {
+    use arct_telemetry::Telemetry;
+
+    match action {
+        TelemetryAction::Stats => {
+            // Load config to check if telemetry is enabled
+            let config = arct_config::Config::load()?;
+
+            if !config.telemetry.enabled {
+                println!("⚠️  Telemetry is disabled");
+                println!("Enable it in your config to collect usage statistics:");
+                println!("  arct config edit");
+                println!("  Set: telemetry.enabled = true");
+                return Ok(());
+            }
+
+            let telemetry = Telemetry::new(true)?;
+            let stats = telemetry.get_stats()?;
+
+            println!("📊 Telemetry Statistics\n");
+            println!("Sessions:  {}", stats.total_sessions);
+            println!("Commands:  {}", stats.total_commands);
+            println!("Errors:    {}", stats.total_errors);
+            println!();
+
+            if !stats.top_commands.is_empty() {
+                println!("Top Commands:");
+                for (cmd, count) in stats.top_commands.iter().take(10) {
+                    println!("  {:20} {}", cmd, count);
+                }
+                println!();
+            }
+
+            if !stats.features_used.is_empty() {
+                println!("Features Used:");
+                for (feature, count) in stats.features_used.iter().take(10) {
+                    println!("  {:20} {}", feature, count);
+                }
+                println!();
+            }
+        }
+        TelemetryAction::Export { output } => {
+            let telemetry = Telemetry::new(true)?;
+            let data = telemetry.export_data()?;
+
+            if let Some(output_path) = output {
+                std::fs::write(&output_path, data)?;
+                println!("✓ Telemetry data exported to: {}", output_path.display());
+            } else {
+                println!("{}", data);
+            }
+        }
+        TelemetryAction::Delete { yes } => {
+            if !yes {
+                print!("Delete all telemetry data? This cannot be undone. [y/N] ");
+                use std::io::{self, Write};
+                io::stdout().flush()?;
+
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
+
+            let telemetry = Telemetry::new(true)?;
+            telemetry.delete_all_data()?;
+            println!("✓ All telemetry data deleted");
+        }
+        TelemetryAction::Path => {
+            let path = arct_telemetry::get_telemetry_db_path()?;
+            println!("{}", path.display());
+        }
+    }
+
+    Ok(())
+}

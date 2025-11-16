@@ -1,0 +1,24 @@
+[package]
+name = "arct-ai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "AI integration for Arc Academy Terminal - OpenAI, Anthropic, and local LLM support"
+
+[dependencies]
+arct-core = { path = "../arct-core", version = "0.1.0" }
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+tokio-test = "0.4"

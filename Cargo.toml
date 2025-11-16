@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/arct-core",
+    "crates/arct-tui",
+    "crates/arct-ai",
+    "crates/arct-config",
+    "crates/arct-telemetry",
+    "crates/arct-cli",
+]
+exclude = [
+    "examples",
+    "packaging",
+    "target",
+]
+
+[workspace.package]
+version = "0.1.1"
+edition = "2021"
+authors = ["Arc Academy"]
+license = "MIT"
+repository = "https://github.com/metarobb/arc-academy-terminal"
+homepage = "https://arcacademy.sh"
+exclude = [
+    "*.txt",
+    "ARCHITECTURE.md",
+    "BUILD_SUMMARY.md",
+    "LESSONS.md",
+    "PROJECT_SUMMARY.md",
+    "RELEASE_CHECKLIST.md",
+    "ROADMAP.md",
+    "SECURITY_AUDIT.md",
+    "SECURITY_REVIEW.md",
+    "TESTING.md",
+    "examples/",
+    "packaging/",
+]
+
+[workspace.dependencies]
+# Core dependencies
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# TUI
+ratatui = "0.26"
+crossterm = "0.27"
+tui-textarea = "0.4"
+
+# Shell integration
+portable-pty = "0.8"
+vte = "0.13"
+
+# AI & HTTP
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Config & Storage
+config = "0.14"
+dirs = "5.0"
+toml = "0.8"
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "cargo", "env"] }
+
+# Utils
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+shellwords = "1.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

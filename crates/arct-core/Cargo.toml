@@ -1,0 +1,20 @@
+[package]
+name = "arct-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Core library for Arc Academy Terminal - command analysis and learning engine"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shellwords.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+uuid.workspace = true

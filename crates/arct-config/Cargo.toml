@@ -1,0 +1,16 @@
+[package]
+name = "arct-config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Configuration management for Arc Academy Terminal"
+
+[dependencies]
+arct-core = { path = "../arct-core", version = "0.1.0" }
+anyhow.workspace = true
+serde.workspace = true
+toml = "0.8"
+dirs.workspace = true

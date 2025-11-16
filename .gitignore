@@ -1,0 +1,46 @@
+# Build
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+dist/
+build/
+*.deb
+*.rpm
+*.pkg
+*.tar.gz
+*.zip
+.cargo/
+*.crate
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local
+.env
+*.local
+.arct/
+.session
+session.json
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+logs/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Development
+internal/

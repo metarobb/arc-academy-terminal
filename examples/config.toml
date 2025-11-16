@@ -1,0 +1,78 @@
+# Arc Academy Terminal - Example Configuration
+# Copy to: ~/.config/arct/config.toml
+
+[general]
+# Application name displayed in TUI
+app_name = "Arc Academy Terminal"
+
+# Command execution timeout (seconds)
+command_timeout = 5
+
+# Enable auto-save for session history
+auto_save = true
+
+[theme]
+# Default theme: "Arc Academy Orange", "Arc Academy Green", "Arc Dark", "Arc Light"
+default_theme = "Arc Academy Orange"
+
+# Enable ANSI color support
+enable_colors = true
+
+# Color depth: "16", "256", or "true"
+color_depth = "256"
+
+[ai]
+# Enable AI assistant (Ctrl+A to toggle)
+enabled = false
+
+# AI provider: "anthropic", "openai", "local", "managed"
+provider = "local"
+
+# API key (or use ARCT_AI_API_KEY environment variable)
+# api_key = "your-api-key-here"
+
+# Model name (provider-specific)
+# For OpenAI: "gpt-4-turbo-preview", "gpt-3.5-turbo"
+# For Anthropic: "claude-3-5-sonnet-20241022"
+# For Local: "llama3.2", "mistral", etc.
+model = "llama3.2"
+
+# Custom API endpoint (for local/self-hosted LLMs)
+# For Ollama (default): "http://localhost:11434"
+# For LM Studio: "http://localhost:1234"
+endpoint = "http://localhost:11434"
+
+# Maximum tokens per AI request
+max_tokens = 1000
+
+[telemetry]
+# Enable telemetry (opt-in only, all data stored locally)
+enabled = false
+
+# Send usage statistics (local only, never transmitted)
+usage_stats = false
+
+# Send error reports (local only, never transmitted)
+error_reports = false
+
+[shell]
+# Persistent environment variables (persisted across sessions)
+[shell.environment]
+# EDITOR = "vim"
+# PAGER = "less"
+
+# Persistent command aliases (persisted across sessions)
+[shell.aliases]
+# ll = "ls -lah"
+# gs = "git status"
+# gp = "git pull"
+
+# Commands to run at startup
+startup_commands = []
+
+[keybindings]
+# Custom keybindings (key -> action mapping)
+# Format: "key" = "action"
+# Available actions: quit, next_panel, previous_panel, help, toggle_theme, toggle_ai
+[keybindings.custom]
+# "ctrl+h" = "help"

@@ -1,0 +1,8 @@
+# Arc Academy Terminal - OpenAI Configuration Example
+
+[ai]
+enabled = true
+provider = "openai"
+api_key = "sk-..."  # Or set ARCT_AI_API_KEY environment variable
+model = "gpt-4-turbo-preview"
+max_tokens = 1000

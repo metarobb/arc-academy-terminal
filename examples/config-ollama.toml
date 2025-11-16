@@ -1,0 +1,13 @@
+# Arc Academy Terminal - Ollama (Local LLM) Configuration Example
+
+[ai]
+enabled = true
+provider = "local"
+endpoint = "http://localhost:11434"
+model = "llama3.2"  # Or any model you have pulled with `ollama pull`
+max_tokens = 1000
+
+# Note: Make sure Ollama is running:
+#   ollama serve
+# And you've pulled a model:
+#   ollama pull llama3.2
