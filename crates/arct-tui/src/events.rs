@@ -40,6 +40,10 @@ pub enum Action {
     ToggleSettings,
     ToggleLesson,
     ShowLessonMenu,
+    ShowAchievements,
+    ShowProgress,
+    ShowChallenges,
+    DismissNotification,
     None,
 }
 
@@ -126,6 +130,11 @@ pub fn key_to_action(key: KeyEvent) -> Action {
         (KeyCode::Char('s'), KeyModifiers::CONTROL) => Action::ToggleSettings,
         (KeyCode::Char('l'), KeyModifiers::CONTROL) => Action::ToggleLesson,
         (KeyCode::Char('m'), KeyModifiers::NONE) => Action::ShowLessonMenu,
+
+        // Gamification panels
+        (KeyCode::Char('a'), KeyModifiers::NONE) => Action::ShowAchievements,
+        (KeyCode::Char('p'), KeyModifiers::NONE) => Action::ShowProgress,
+        (KeyCode::Char('c'), KeyModifiers::NONE) => Action::ShowChallenges,
 
         _ => Action::None,
     }

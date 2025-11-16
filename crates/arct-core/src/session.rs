@@ -1,5 +1,7 @@
 //! Session management and state tracking
 
+use crate::challenge::ChallengeManager;
+use crate::stats::UserStats;
 use crate::types::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,6 +16,8 @@ pub struct Session {
     pub env_vars: HashMap<String, String>,
     pub aliases: HashMap<String, String>,
     pub statistics: SessionStatistics,
+    pub stats: UserStats,
+    pub challenge_manager: ChallengeManager,
 }
 
 /// Current state of the session
@@ -70,6 +74,8 @@ impl Session {
                 errors: 0,
                 warnings_shown: 0,
             },
+            stats: UserStats::new(),
+            challenge_manager: ChallengeManager::new(),
         }
     }
 
@@ -88,7 +94,7 @@ impl Session {
         // Update statistics
         self.statistics.total_commands += 1;
         let program = command.split_whitespace().next().unwrap_or("").to_string();
-        *self.statistics.command_counts.entry(program).or_insert(0) += 1;
+        *self.statistics.command_counts.entry(program.clone()).or_insert(0) += 1;
         self.statistics.unique_commands = self.statistics.command_counts.len();
 
         if let Some(code) = exit_code {
@@ -96,6 +102,10 @@ impl Session {
                 self.statistics.errors += 1;
             }
         }
+
+        // Update user stats
+        self.stats.record_command_use(program);
+        self.stats.update_streak();
 
         self.state.last_activity = now;
         self.state.exit_code = exit_code.unwrap_or(0);

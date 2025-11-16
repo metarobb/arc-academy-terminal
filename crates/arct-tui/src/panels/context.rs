@@ -31,6 +31,8 @@ impl ContextPanel {
         analytics_summary: Option<&crate::analytics::AnalyticsSummary>,
         lesson_mode: bool,
         virtual_fs: Option<&arct_core::VirtualFileSystem>,
+        user_stats: &arct_core::UserStats,
+        challenge_manager: &arct_core::ChallengeManager,
     ) {
         let border_style = if focused {
             theme.style_border_focused()
@@ -244,7 +246,72 @@ impl ContextPanel {
 
         items.push(ListItem::new(Line::from("")));
 
-        // Learning Progress section
+        // Gamification Stats section
+        items.push(ListItem::new(Line::from(vec![
+            icons::celebration(),
+            Span::styled("Your Progress", theme.style_header()),
+        ])));
+        items.push(ListItem::new(Line::from("")));
+
+        // Current streak with fire emoji
+        items.push(ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("", theme.style_accent()),
+            Span::raw(" Streak: "),
+            Span::styled(format!("{} days", user_stats.current_streak), theme.style_accent()),
+        ])));
+
+        // Lessons completed
+        items.push(ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            icons::lesson(),
+            Span::raw(" Lessons: "),
+            Span::styled(format!("{}", user_stats.lessons_completed.len()), theme.style_success()),
+        ])));
+
+        // Achievements unlocked
+        items.push(ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            icons::target(),
+            Span::raw(" Achievements: "),
+            Span::styled(format!("{}", user_stats.achievements.total_unlocked()), theme.style_info()),
+        ])));
+
+        // Today's challenge status
+        let daily_status = if challenge_manager.is_daily_completed() {
+            Span::styled("Complete!", theme.style_success())
+        } else {
+            Span::styled("Pending", theme.style_dim())
+        };
+        items.push(ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            icons::lightning(),
+            Span::raw(" Today's Challenge: "),
+            daily_status,
+        ])));
+
+        items.push(ListItem::new(Line::from("")));
+
+        // Hints for gamification features
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled("  Press ", theme.style_dim()),
+            Span::styled("a", theme.style_accent()),
+            Span::styled(" for achievements", theme.style_dim()),
+        ])));
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled("  Press ", theme.style_dim()),
+            Span::styled("p", theme.style_accent()),
+            Span::styled(" for progress", theme.style_dim()),
+        ])));
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled("  Press ", theme.style_dim()),
+            Span::styled("c", theme.style_accent()),
+            Span::styled(" for challenges", theme.style_dim()),
+        ])));
+
+        items.push(ListItem::new(Line::from("")));
+
+        // Learning Progress section (from analytics)
         if let Some(summary) = analytics_summary {
             items.push(ListItem::new(Line::from(vec![
                 icons::target(),

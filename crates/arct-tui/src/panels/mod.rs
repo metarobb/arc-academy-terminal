@@ -8,6 +8,10 @@ pub mod lesson;
 pub mod lesson_menu;
 pub mod onboarding;
 pub mod settings;
+pub mod achievements;
+pub mod progress;
+pub mod challenges;
+pub mod notification;
 
 use ratatui::{layout::Rect, Frame};
 

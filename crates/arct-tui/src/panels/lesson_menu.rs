@@ -65,6 +65,8 @@ impl LessonMenuPanel {
         frame: &mut Frame,
         theme: &Theme,
         completed_lessons: &HashSet<String>,
+        user_stats: &arct_core::UserStats,
+        recommendation_engine: &arct_core::RecommendationEngine,
     ) {
         let area = Self::centered_rect(70, 60, frame.size());
 
@@ -84,7 +86,8 @@ impl LessonMenuPanel {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Header info
+                Constraint::Length(3),   // Header info
+                Constraint::Length(8),   // Recommended lessons
                 Constraint::Min(10),     // Lesson list
                 Constraint::Length(4),   // Controls help
             ])
@@ -102,6 +105,49 @@ impl LessonMenuPanel {
         ])
         .alignment(Alignment::Center);
         frame.render_widget(header, chunks[0]);
+
+        // Recommended lessons section
+        let recommendations = recommendation_engine.get_recommendations(
+            completed_lessons,
+            user_stats,
+            3,  // Show top 3 recommendations
+        );
+
+        let mut rec_items = Vec::new();
+        rec_items.push(ListItem::new(Line::from(vec![
+            icons::target(),
+            Span::styled(" Recommended for You", theme.style_header()),
+        ])));
+        rec_items.push(ListItem::new(Line::from("")));
+
+        if recommendations.is_empty() {
+            rec_items.push(ListItem::new(Line::from(vec![
+                Span::styled("  No recommendations yet. Complete some lessons to get started!", theme.style_dim()),
+            ])));
+        } else {
+            for rec in recommendations {
+                let reason_text = match rec.reason {
+                    arct_core::RecommendationReason::NextInSequence => "Next in sequence",
+                    arct_core::RecommendationReason::PrerequisiteSatisfied => "Prerequisites met!",
+                    arct_core::RecommendationReason::SameDifficulty => "Matches your level",
+                    arct_core::RecommendationReason::SkillLevelMatch => "Perfect for you",
+                    arct_core::RecommendationReason::RelatedTopic => "Related topic",
+                    _ => "Recommended",
+                };
+
+                let lesson_title = rec.lesson.title.clone();
+                rec_items.push(ListItem::new(Line::from(vec![
+                    Span::raw("  "),
+                    icons::lightning(),
+                    Span::styled(lesson_title, theme.style_accent()),
+                    Span::raw("  "),
+                    Span::styled(format!("({})", reason_text), theme.style_dim()),
+                ])));
+            }
+        }
+
+        let rec_list = List::new(rec_items);
+        frame.render_widget(rec_list, chunks[1]);
 
         // Lesson list
         let lessons = self.library.all();
@@ -154,7 +200,7 @@ impl LessonMenuPanel {
         }
 
         let list = List::new(items);
-        frame.render_widget(list, chunks[1]);
+        frame.render_widget(list, chunks[2]);
 
         // Controls help
         let controls = Paragraph::new(vec![
@@ -176,7 +222,7 @@ impl LessonMenuPanel {
             ]),
         ])
         .alignment(Alignment::Center);
-        frame.render_widget(controls, chunks[2]);
+        frame.render_widget(controls, chunks[3]);
     }
 
     /// Helper function to create a centered rectangle

@@ -1,0 +1,606 @@
+//! Daily and weekly challenge system
+//!
+//! This module provides an engaging challenge system with daily tasks,
+//! weekly scenarios, and speed challenges to motivate continuous learning.
+
+use crate::lesson::{CommandValidation, Difficulty};
+use chrono::{Datelike, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+/// Represents a learning challenge that can be completed
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Challenge {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub difficulty: Difficulty,
+    pub challenge_type: ChallengeType,
+    pub points: u32,
+}
+
+/// Different types of challenges available
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ChallengeType {
+    /// A single command task to complete daily
+    DailyCommand {
+        command: String,
+        task_description: String,
+        validation: CommandValidation,
+    },
+    /// Multi-step scenario challenge for weekly engagement
+    WeeklyScenario {
+        scenario: String,
+        steps: Vec<ChallengeStep>,
+    },
+    /// Timed challenge to complete tasks quickly
+    SpeedChallenge {
+        task: String,
+        time_limit_seconds: u32,
+        commands: Vec<String>,
+    },
+}
+
+/// A single step within a multi-step challenge
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChallengeStep {
+    pub description: String,
+    pub validation: CommandValidation,
+    pub hint: Option<String>,
+}
+
+/// Manages active and completed challenges
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChallengeManager {
+    /// Currently active daily challenge
+    pub daily_challenge: Option<Challenge>,
+    /// Currently active weekly challenge
+    pub weekly_challenge: Option<Challenge>,
+    /// Set of completed challenge IDs
+    pub completed_challenges: HashSet<String>,
+    /// Date when daily challenge was last generated
+    last_daily_generated: Option<chrono::NaiveDate>,
+    /// ISO week number when weekly challenge was last generated
+    last_weekly_generated: Option<u32>,
+}
+
+impl ChallengeManager {
+    /// Create a new challenge manager
+    pub fn new() -> Self {
+        Self {
+            daily_challenge: None,
+            weekly_challenge: None,
+            completed_challenges: HashSet::new(),
+            last_daily_generated: None,
+            last_weekly_generated: None,
+        }
+    }
+
+    /// Get or generate today's daily challenge
+    pub fn get_daily_challenge(&mut self) -> Challenge {
+        let today = Utc::now().date_naive();
+
+        // Check if we need to generate a new daily challenge
+        if self.last_daily_generated != Some(today) {
+            self.daily_challenge = Some(self.generate_daily_challenge(today));
+            self.last_daily_generated = Some(today);
+        }
+
+        self.daily_challenge.clone().unwrap()
+    }
+
+    /// Get or generate this week's weekly challenge
+    pub fn get_weekly_challenge(&mut self) -> Challenge {
+        let now = Utc::now();
+        let current_week = now.iso_week().week();
+
+        // Check if we need to generate a new weekly challenge
+        if self.last_weekly_generated != Some(current_week) {
+            self.weekly_challenge = Some(self.generate_weekly_challenge(current_week));
+            self.last_weekly_generated = Some(current_week);
+        }
+
+        self.weekly_challenge.clone().unwrap()
+    }
+
+    /// Mark a challenge as completed
+    pub fn complete_challenge(&mut self, challenge_id: String) {
+        self.completed_challenges.insert(challenge_id);
+    }
+
+    /// Check if a challenge has been completed
+    pub fn is_challenge_completed(&self, challenge_id: &str) -> bool {
+        self.completed_challenges.contains(challenge_id)
+    }
+
+    /// Generate a daily challenge based on the date
+    fn generate_daily_challenge(&self, date: chrono::NaiveDate) -> Challenge {
+        let all_daily = all_daily_challenges();
+        // Use day of year to deterministically select a challenge
+        let index = (date.ordinal0() as usize) % all_daily.len();
+        all_daily[index].clone()
+    }
+
+    /// Generate a weekly challenge based on the week number
+    fn generate_weekly_challenge(&self, week: u32) -> Challenge {
+        let all_weekly = all_weekly_challenges();
+        // Use week number to deterministically select a challenge
+        let index = (week as usize - 1) % all_weekly.len();
+        all_weekly[index].clone()
+    }
+
+    /// Get all challenges completed this week
+    pub fn weekly_completions(&self) -> usize {
+        // This could be enhanced to track completion timestamps
+        // For now, returns total completed challenges
+        self.completed_challenges.len()
+    }
+
+    /// Check if today's daily challenge is completed
+    pub fn is_daily_completed(&self) -> bool {
+        if let Some(ref daily) = self.daily_challenge {
+            self.is_challenge_completed(&daily.id)
+        } else {
+            false
+        }
+    }
+
+    /// Check if this week's weekly challenge is completed
+    pub fn is_weekly_completed(&self) -> bool {
+        if let Some(ref weekly) = self.weekly_challenge {
+            self.is_challenge_completed(&weekly.id)
+        } else {
+            false
+        }
+    }
+}
+
+impl Default for ChallengeManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Get all available daily challenges
+pub fn all_daily_challenges() -> Vec<Challenge> {
+    vec![
+        Challenge {
+            id: "daily_grep_recursive".to_string(),
+            title: "Master Recursive Search".to_string(),
+            description: "Use grep with the -r flag to search for 'error' in all files within a directory.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "grep -r 'error' /var/log".to_string(),
+                task_description: "Search recursively for the word 'error' in log files".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 25,
+        },
+        Challenge {
+            id: "daily_chmod_executable".to_string(),
+            title: "Make It Executable".to_string(),
+            description: "Use chmod to make a script file executable by adding execute permissions.".to_string(),
+            difficulty: Difficulty::Beginner,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "chmod +x script.sh".to_string(),
+                task_description: "Make a file executable using chmod".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 20,
+        },
+        Challenge {
+            id: "daily_find_by_name".to_string(),
+            title: "Find by Name".to_string(),
+            description: "Use the find command to locate all .txt files in your home directory.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "find ~ -name '*.txt'".to_string(),
+                task_description: "Find all text files in home directory".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 25,
+        },
+        Challenge {
+            id: "daily_pipe_mastery".to_string(),
+            title: "Pipe Master".to_string(),
+            description: "Combine ls and grep using a pipe to find files containing 'test' in their names.".to_string(),
+            difficulty: Difficulty::Beginner,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "ls | grep test".to_string(),
+                task_description: "Use pipes to filter ls output with grep".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 20,
+        },
+        Challenge {
+            id: "daily_tar_archive".to_string(),
+            title: "Archive Creation".to_string(),
+            description: "Create a compressed tar archive of a directory using tar -czf.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "tar -czf archive.tar.gz directory/".to_string(),
+                task_description: "Create a compressed tar archive".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 30,
+        },
+        Challenge {
+            id: "daily_curl_download".to_string(),
+            title: "Web Fetcher".to_string(),
+            description: "Use curl to download a file from a URL and save it with -o option.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "curl -o output.html https://example.com".to_string(),
+                task_description: "Download a file using curl".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 25,
+        },
+        Challenge {
+            id: "daily_process_check".to_string(),
+            title: "Process Inspector".to_string(),
+            description: "Use ps aux combined with grep to find a specific running process.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "ps aux | grep firefox".to_string(),
+                task_description: "Find a running process by name".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 25,
+        },
+        Challenge {
+            id: "daily_disk_usage".to_string(),
+            title: "Disk Usage Detective".to_string(),
+            description: "Use du -sh to find the size of a directory in human-readable format.".to_string(),
+            difficulty: Difficulty::Beginner,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "du -sh /var/log".to_string(),
+                task_description: "Check directory size with du".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 20,
+        },
+        Challenge {
+            id: "daily_sed_replace".to_string(),
+            title: "Text Transformer".to_string(),
+            description: "Use sed to replace all occurrences of a word in a file.".to_string(),
+            difficulty: Difficulty::Advanced,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "sed -i 's/old/new/g' file.txt".to_string(),
+                task_description: "Replace text in a file using sed".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 35,
+        },
+        Challenge {
+            id: "daily_symlink_create".to_string(),
+            title: "Link Creator".to_string(),
+            description: "Create a symbolic link using ln -s pointing to a target file.".to_string(),
+            difficulty: Difficulty::Beginner,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "ln -s /path/to/target linkname".to_string(),
+                task_description: "Create a symbolic link".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 20,
+        },
+        Challenge {
+            id: "daily_history_search".to_string(),
+            title: "History Hunter".to_string(),
+            description: "Use history with grep to find commands you've run in the past.".to_string(),
+            difficulty: Difficulty::Beginner,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "history | grep git".to_string(),
+                task_description: "Search command history".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 15,
+        },
+        Challenge {
+            id: "daily_wc_count".to_string(),
+            title: "Word Counter".to_string(),
+            description: "Count the number of lines in a file using wc -l.".to_string(),
+            difficulty: Difficulty::Beginner,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "wc -l file.txt".to_string(),
+                task_description: "Count lines in a file".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 15,
+        },
+        Challenge {
+            id: "daily_env_check".to_string(),
+            title: "Environment Explorer".to_string(),
+            description: "Use env or printenv to display all environment variables.".to_string(),
+            difficulty: Difficulty::Beginner,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "env".to_string(),
+                task_description: "Display environment variables".to_string(),
+                validation: CommandValidation::CommandOnly,
+            },
+            points: 15,
+        },
+        Challenge {
+            id: "daily_tail_follow".to_string(),
+            title: "Log Follower".to_string(),
+            description: "Use tail -f to continuously monitor a log file in real-time.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "tail -f /var/log/syslog".to_string(),
+                task_description: "Follow a log file in real-time".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 25,
+        },
+        Challenge {
+            id: "daily_awk_column".to_string(),
+            title: "Column Extractor".to_string(),
+            description: "Use awk to extract a specific column from formatted text output.".to_string(),
+            difficulty: Difficulty::Advanced,
+            challenge_type: ChallengeType::DailyCommand {
+                command: "ps aux | awk '{print $1, $11}'".to_string(),
+                task_description: "Extract specific columns using awk".to_string(),
+                validation: CommandValidation::CommandAndFlags,
+            },
+            points: 35,
+        },
+    ]
+}
+
+/// Get all available weekly challenges
+pub fn all_weekly_challenges() -> Vec<Challenge> {
+    vec![
+        Challenge {
+            id: "weekly_debug_server".to_string(),
+            title: "Debug the Broken Server".to_string(),
+            description: "A simulated web server isn't starting. Use diagnostic commands to find and fix the issues.".to_string(),
+            difficulty: Difficulty::Advanced,
+            challenge_type: ChallengeType::WeeklyScenario {
+                scenario: "The web server on port 8080 isn't responding. Debug the issue step by step.".to_string(),
+                steps: vec![
+                    ChallengeStep {
+                        description: "Check if the server process is running".to_string(),
+                        validation: CommandValidation::Regex("ps.*8080|netstat.*8080|lsof.*8080".to_string()),
+                        hint: Some("Try 'ps aux | grep server' or 'netstat -tulpn'".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "Check the server log files for errors".to_string(),
+                        validation: CommandValidation::Regex("tail.*log|cat.*log|less.*log".to_string()),
+                        hint: Some("Look in /var/log/ or check application-specific logs".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "Verify the port is not in use by another process".to_string(),
+                        validation: CommandValidation::Regex("netstat.*8080|lsof.*8080|ss.*8080".to_string()),
+                        hint: Some("Use 'lsof -i :8080' or 'netstat -tulpn | grep 8080'".to_string()),
+                    },
+                ],
+            },
+            points: 100,
+        },
+        Challenge {
+            id: "weekly_organize_files".to_string(),
+            title: "Organize the Chaos".to_string(),
+            description: "A directory is filled with mixed file types. Organize them into proper subdirectories.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::WeeklyScenario {
+                scenario: "The downloads folder has 100+ files of different types all mixed together. Organize them!".to_string(),
+                steps: vec![
+                    ChallengeStep {
+                        description: "Create directories for different file types (images, documents, code)".to_string(),
+                        validation: CommandValidation::Regex("mkdir.*images|mkdir.*documents|mkdir.*code".to_string()),
+                        hint: Some("Use 'mkdir -p' to create multiple directories".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "Find and move all image files to the images directory".to_string(),
+                        validation: CommandValidation::Regex("mv.*\\.(jpg|png|gif)|find.*\\.(jpg|png).*-exec mv".to_string()),
+                        hint: Some("Use 'find' with '-name' or a for loop with 'mv'".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "Create an archive of the organized directories".to_string(),
+                        validation: CommandValidation::Regex("tar.*czf|zip.*-r".to_string()),
+                        hint: Some("Use 'tar -czf organized.tar.gz' or 'zip -r'".to_string()),
+                    },
+                ],
+            },
+            points: 80,
+        },
+        Challenge {
+            id: "weekly_security_audit".to_string(),
+            title: "Security Audit".to_string(),
+            description: "Perform a basic security audit by checking file permissions and user access.".to_string(),
+            difficulty: Difficulty::Advanced,
+            challenge_type: ChallengeType::WeeklyScenario {
+                scenario: "Audit file permissions and find potential security issues in a system directory.".to_string(),
+                steps: vec![
+                    ChallengeStep {
+                        description: "Find all world-writable files".to_string(),
+                        validation: CommandValidation::Regex("find.*-perm.*777|find.*-perm.*o=w".to_string()),
+                        hint: Some("Use 'find /path -perm -002'".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "List all users who can access the system".to_string(),
+                        validation: CommandValidation::Regex("cat /etc/passwd|getent passwd|cut.*passwd".to_string()),
+                        hint: Some("Check /etc/passwd or use 'getent passwd'".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "Check for files with setuid bit enabled".to_string(),
+                        validation: CommandValidation::Regex("find.*-perm.*4000|find.*-perm.*u=s".to_string()),
+                        hint: Some("Use 'find / -perm -4000'".to_string()),
+                    },
+                ],
+            },
+            points: 120,
+        },
+        Challenge {
+            id: "weekly_backup_strategy".to_string(),
+            title: "Backup Strategy".to_string(),
+            description: "Create a comprehensive backup of important files with proper organization.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::WeeklyScenario {
+                scenario: "Set up an automated backup system for critical directories.".to_string(),
+                steps: vec![
+                    ChallengeStep {
+                        description: "Create a timestamped backup directory".to_string(),
+                        validation: CommandValidation::Regex("mkdir.*backup.*$(date|date.*\\+)".to_string()),
+                        hint: Some("Use 'mkdir backup-$(date +%Y%m%d)'".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "Copy important files preserving permissions and timestamps".to_string(),
+                        validation: CommandValidation::Regex("cp -a|cp.*-p|rsync.*-a".to_string()),
+                        hint: Some("Use 'cp -a' or 'rsync -av'".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "Create a compressed archive of the backup".to_string(),
+                        validation: CommandValidation::Regex("tar.*czf|gzip|zip".to_string()),
+                        hint: Some("Use 'tar -czf backup.tar.gz backup/'".to_string()),
+                    },
+                ],
+            },
+            points: 90,
+        },
+        Challenge {
+            id: "weekly_log_analysis".to_string(),
+            title: "Log Analysis Detective".to_string(),
+            description: "Analyze system logs to find errors, warnings, and unusual patterns.".to_string(),
+            difficulty: Difficulty::Advanced,
+            challenge_type: ChallengeType::WeeklyScenario {
+                scenario: "Investigate system logs to identify and report issues.".to_string(),
+                steps: vec![
+                    ChallengeStep {
+                        description: "Find all error messages in system logs".to_string(),
+                        validation: CommandValidation::Regex("grep.*error|grep.*ERROR|egrep.*'error|ERROR'".to_string()),
+                        hint: Some("Use 'grep -i error /var/log/syslog'".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "Count occurrences of different error types".to_string(),
+                        validation: CommandValidation::Regex("sort|uniq -c|wc".to_string()),
+                        hint: Some("Combine 'sort | uniq -c | sort -n'".to_string()),
+                    },
+                    ChallengeStep {
+                        description: "Extract and save the top 10 most frequent errors to a file".to_string(),
+                        validation: CommandValidation::Regex("head.*>|>.*head|tee".to_string()),
+                        hint: Some("Use pipes and redirect with '> errors.txt'".to_string()),
+                    },
+                ],
+            },
+            points: 110,
+        },
+    ]
+}
+
+/// Get all available speed challenges
+pub fn all_speed_challenges() -> Vec<Challenge> {
+    vec![
+        Challenge {
+            id: "speed_cleanup_tmp".to_string(),
+            title: "Rapid Cleanup".to_string(),
+            description: "Find and delete all .tmp files in a directory tree within 60 seconds.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::SpeedChallenge {
+                task: "Remove all temporary files (.tmp extension) from the current directory and subdirectories".to_string(),
+                time_limit_seconds: 60,
+                commands: vec![
+                    "find . -name '*.tmp' -delete".to_string(),
+                    "find . -name '*.tmp' -exec rm {} \\;".to_string(),
+                ],
+            },
+            points: 50,
+        },
+        Challenge {
+            id: "speed_count_files".to_string(),
+            title: "Quick Count".to_string(),
+            description: "Count all files in a directory within 30 seconds.".to_string(),
+            difficulty: Difficulty::Beginner,
+            challenge_type: ChallengeType::SpeedChallenge {
+                task: "Count the total number of files (not directories) in the current directory tree".to_string(),
+                time_limit_seconds: 30,
+                commands: vec![
+                    "find . -type f | wc -l".to_string(),
+                    "ls -lR | grep '^-' | wc -l".to_string(),
+                ],
+            },
+            points: 40,
+        },
+        Challenge {
+            id: "speed_largest_files".to_string(),
+            title: "Size Hunter".to_string(),
+            description: "Find the 5 largest files in a directory within 45 seconds.".to_string(),
+            difficulty: Difficulty::Intermediate,
+            challenge_type: ChallengeType::SpeedChallenge {
+                task: "List the 5 largest files in the directory tree with their sizes".to_string(),
+                time_limit_seconds: 45,
+                commands: vec![
+                    "find . -type f -exec ls -lh {} \\; | sort -k5 -hr | head -5".to_string(),
+                    "du -ah . | sort -rh | head -5".to_string(),
+                ],
+            },
+            points: 55,
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_challenge_manager_creation() {
+        let manager = ChallengeManager::new();
+        assert!(manager.daily_challenge.is_none());
+        assert!(manager.weekly_challenge.is_none());
+        assert_eq!(manager.completed_challenges.len(), 0);
+    }
+
+    #[test]
+    fn test_daily_challenge_generation() {
+        let mut manager = ChallengeManager::new();
+        let challenge = manager.get_daily_challenge();
+        assert!(!challenge.id.is_empty());
+        assert!(!challenge.title.is_empty());
+        assert!(challenge.points > 0);
+    }
+
+    #[test]
+    fn test_weekly_challenge_generation() {
+        let mut manager = ChallengeManager::new();
+        let challenge = manager.get_weekly_challenge();
+        assert!(!challenge.id.is_empty());
+        assert!(!challenge.title.is_empty());
+        assert!(challenge.points > 0);
+    }
+
+    #[test]
+    fn test_challenge_completion() {
+        let mut manager = ChallengeManager::new();
+        assert!(!manager.is_challenge_completed("test_challenge"));
+
+        manager.complete_challenge("test_challenge".to_string());
+        assert!(manager.is_challenge_completed("test_challenge"));
+    }
+
+    #[test]
+    fn test_daily_challenges_exist() {
+        let challenges = all_daily_challenges();
+        assert!(!challenges.is_empty());
+        assert!(challenges.len() >= 10);
+    }
+
+    #[test]
+    fn test_weekly_challenges_exist() {
+        let challenges = all_weekly_challenges();
+        assert!(!challenges.is_empty());
+        assert!(challenges.len() >= 5);
+    }
+
+    #[test]
+    fn test_deterministic_daily_selection() {
+        let mut manager1 = ChallengeManager::new();
+        let mut manager2 = ChallengeManager::new();
+
+        let challenge1 = manager1.get_daily_challenge();
+        let challenge2 = manager2.get_daily_challenge();
+
+        // Same day should give same challenge
+        assert_eq!(challenge1.id, challenge2.id);
+    }
+}

@@ -129,6 +129,30 @@ pub struct App {
 
     /// Completed lesson IDs
     pub completed_lessons: std::collections::HashSet<String>,
+
+    /// User statistics and progress tracking
+    pub user_stats: arct_core::UserStats,
+
+    /// Challenge manager for daily/weekly challenges
+    pub challenge_manager: arct_core::ChallengeManager,
+
+    /// Recommendation engine for suggesting lessons
+    pub recommendation_engine: arct_core::RecommendationEngine,
+
+    /// Achievements panel
+    pub achievements_panel: Option<crate::panels::achievements::AchievementsPanel>,
+
+    /// Progress panel
+    pub progress_panel: Option<crate::panels::progress::ProgressPanel>,
+
+    /// Challenges panel
+    pub challenges_panel: Option<crate::panels::challenges::ChallengesPanel>,
+
+    /// Pending achievements to show notifications for
+    pub pending_achievements: Vec<arct_core::Achievement>,
+
+    /// Currently showing achievement notification
+    pub showing_notification: Option<crate::panels::notification::NotificationPanel>,
 }
 
 impl App {
@@ -205,6 +229,16 @@ impl App {
             String::new()
         };
 
+        // Initialize user stats (will be loaded from persistence later)
+        let mut user_stats = arct_core::UserStats::new();
+        user_stats.update_streak(); // Update streak on app start
+
+        // Initialize challenge manager
+        let mut challenge_manager = arct_core::ChallengeManager::new();
+        // Generate today's challenges
+        challenge_manager.get_daily_challenge();
+        challenge_manager.get_weekly_challenge();
+
         Ok(Self {
             should_quit: false,
             active_panel: PanelId::Shell,
@@ -242,23 +276,20 @@ impl App {
             virtual_fs: None,
             lesson_menu: None,
             completed_lessons: std::collections::HashSet::new(),
+            user_stats,
+            challenge_manager,
+            recommendation_engine: arct_core::RecommendationEngine::new(),
+            achievements_panel: None,
+            progress_panel: None,
+            challenges_panel: None,
+            pending_achievements: Vec::new(),
+            showing_notification: None,
         })
     }
 
-    /// Initialize lesson panel with first lesson loaded
+    /// Initialize empty lesson panel (user will select lesson from menu)
     fn initialize_lesson_panel() -> Option<crate::panels::lesson::LessonPanel> {
-        use arct_core::LessonLibrary;
-
-        let library = LessonLibrary::new();
-        let mut panel = crate::panels::lesson::LessonPanel::new();
-
-        // Auto-load the first lesson (Navigation Basics)
-        if let Some(lesson) = library.get("nav-basics") {
-            panel.load_lesson(lesson.clone());
-            Some(panel)
-        } else {
-            Some(panel)  // Return empty panel if lesson not found
-        }
+        Some(crate::panels::lesson::LessonPanel::new())
     }
 
     /// Create AI provider from configuration
@@ -641,8 +672,16 @@ impl App {
                 }
             }
             Action::Escape => {
-                if self.show_help {
+                if self.showing_notification.is_some() {
+                    self.dismiss_notification();
+                } else if self.show_help {
                     self.show_help = false;
+                } else if self.achievements_panel.is_some() {
+                    self.achievements_panel = None;
+                } else if self.progress_panel.is_some() {
+                    self.progress_panel = None;
+                } else if self.challenges_panel.is_some() {
+                    self.challenges_panel = None;
                 } else if self.settings_panel.is_some() {
                     self.settings_panel = None;
                 } else if self.lesson_menu.is_some() {
@@ -652,9 +691,23 @@ impl App {
                 }
             }
             Action::Enter => {
-                if !self.ai_mode {
+                if self.showing_notification.is_some() {
+                    self.dismiss_notification();
+                } else if !self.ai_mode {
                     self.execute_command().await?;
                 }
+            }
+            Action::ShowAchievements => {
+                self.toggle_achievements_panel();
+            }
+            Action::ShowProgress => {
+                self.toggle_progress_panel();
+            }
+            Action::ShowChallenges => {
+                self.toggle_challenges_panel();
+            }
+            Action::DismissNotification => {
+                self.dismiss_notification();
             }
             _ => {}
         }
@@ -736,6 +789,9 @@ impl App {
 
         // If in lesson mode, validate against current lesson step
         if self.lesson_mode {
+            // Extract lesson completion info outside the borrow scope
+            let mut lesson_completed_info: Option<(String, arct_core::Difficulty)> = None;
+
             if let Some(ref mut lesson_panel) = self.lesson_panel {
                 let validation = lesson_panel.validate_current_step(&command_str);
 
@@ -750,9 +806,9 @@ impl App {
                     );
 
                     if !lesson_panel.next_step() {
-                        // Lesson complete!
+                        // Lesson complete! Extract info for later processing
                         if let Some(lesson) = lesson_panel.current_lesson.as_ref() {
-                            self.completed_lessons.insert(lesson.id.clone());
+                            lesson_completed_info = Some((lesson.id.clone(), lesson.difficulty));
                         }
                         self.last_output.push_str(&format!("\n{}Congratulations! You've completed this lesson!\n\nPress Ctrl+L to exit lesson mode or 'm' to select another lesson.\n", icons::celebration().content));
                     }
@@ -776,8 +832,14 @@ impl App {
 
                 self.command_buffer.clear();
                 self.add_to_history(command_str.clone());
-                return Ok(());
             }
+
+            // Process lesson completion outside the borrow scope
+            if let Some((lesson_id, difficulty)) = lesson_completed_info {
+                self.record_lesson_completion(lesson_id, difficulty);
+            }
+
+            return Ok(());
         }
 
         // Generate explanation
@@ -878,7 +940,11 @@ impl App {
         }
 
         // Add to history
-        self.add_to_history(command_str);
+        self.add_to_history(command_str.clone());
+
+        // Track command use for stats and achievements
+        self.record_command_for_stats(&command_str);
+        self.check_and_unlock_achievements();
 
         // Clear buffer
         self.command_buffer.clear();
@@ -1298,6 +1364,11 @@ impl App {
             if self.lesson_panel.is_none() {
                 self.lesson_panel = Self::initialize_lesson_panel();
             }
+
+            // Show lesson menu to let user choose a lesson
+            if self.lesson_menu.is_none() {
+                self.lesson_menu = Some(crate::panels::lesson_menu::LessonMenuPanel::new());
+            }
         } else {
             // Clean up virtual filesystem
             self.virtual_fs = None;
@@ -1656,6 +1727,93 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Toggle achievements panel
+    pub fn toggle_achievements_panel(&mut self) {
+        if self.achievements_panel.is_some() {
+            self.achievements_panel = None;
+        } else {
+            self.achievements_panel = Some(crate::panels::achievements::AchievementsPanel::new());
+        }
+    }
+
+    /// Toggle progress panel
+    pub fn toggle_progress_panel(&mut self) {
+        if self.progress_panel.is_some() {
+            self.progress_panel = None;
+        } else {
+            self.progress_panel = Some(crate::panels::progress::ProgressPanel::new());
+        }
+    }
+
+    /// Toggle challenges panel
+    pub fn toggle_challenges_panel(&mut self) {
+        if self.challenges_panel.is_some() {
+            self.challenges_panel = None;
+        } else {
+            self.challenges_panel = Some(crate::panels::challenges::ChallengesPanel::new());
+        }
+    }
+
+    /// Check for newly unlocked achievements and queue notifications
+    pub fn check_and_unlock_achievements(&mut self) {
+        let newly_unlocked = self.user_stats.check_achievements();
+
+        // Add to pending queue
+        for achievement in newly_unlocked {
+            self.pending_achievements.push(achievement);
+        }
+
+        // Show first notification if we're not already showing one
+        if self.showing_notification.is_none() && !self.pending_achievements.is_empty() {
+            self.show_next_achievement_notification();
+        }
+    }
+
+    /// Show the next achievement notification from the queue
+    fn show_next_achievement_notification(&mut self) {
+        if let Some(achievement) = self.pending_achievements.first() {
+            self.showing_notification = Some(crate::panels::notification::NotificationPanel::new(
+                achievement.clone(),
+            ));
+        }
+    }
+
+    /// Dismiss the current achievement notification and show next if any
+    fn dismiss_notification(&mut self) {
+        self.showing_notification = None;
+
+        // Remove the first achievement from queue if it was shown
+        if !self.pending_achievements.is_empty() {
+            self.pending_achievements.remove(0);
+        }
+
+        // Show next notification if there are more
+        if !self.pending_achievements.is_empty() {
+            self.show_next_achievement_notification();
+        }
+    }
+
+    /// Record command execution for stats tracking
+    pub fn record_command_for_stats(&mut self, command: &str) {
+        // Extract just the command name (first word)
+        let command_name = command.split_whitespace().next().unwrap_or("");
+        if !command_name.is_empty() {
+            self.user_stats.record_command_use(command_name.to_string());
+        }
+    }
+
+    /// Record lesson completion and check for achievements
+    pub fn record_lesson_completion(&mut self, lesson_id: String, difficulty: arct_core::Difficulty) {
+        // Record in stats
+        self.user_stats.record_lesson_completion(lesson_id.clone(), difficulty);
+
+        // Add to completed lessons set
+        self.completed_lessons.insert(lesson_id);
+
+        // Check for newly unlocked achievements
+        self.check_and_unlock_achievements();
     }
 }
 

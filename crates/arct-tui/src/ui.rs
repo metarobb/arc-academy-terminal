@@ -57,7 +57,31 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     // Draw lesson menu if active
     if let Some(ref menu) = app.lesson_menu {
-        menu.render(frame, &app.theme, &app.completed_lessons);
+        menu.render(
+            frame,
+            &app.theme,
+            &app.completed_lessons,
+            &app.user_stats,
+            &app.recommendation_engine,
+        );
+    }
+
+    // Draw gamification panels if active
+    if let Some(ref panel) = app.achievements_panel {
+        panel.render(frame, &app.theme, &app.user_stats.achievements);
+    }
+
+    if let Some(ref panel) = app.progress_panel {
+        panel.render(frame, &app.theme, &app.user_stats);
+    }
+
+    if let Some(ref panel) = app.challenges_panel {
+        panel.render(frame, &app.theme, &app.challenge_manager);
+    }
+
+    // Achievement notification has highest priority (render last)
+    if let Some(ref notification) = app.showing_notification {
+        notification.render(frame, &app.theme);
     }
 }
 
@@ -71,11 +95,11 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         String::new()
     };
-    let version = format!("v0.1.0-alpha | {} | arcacademy.sh ", app.theme.name);
+    let version = format!("v{} | {} | arcacademy.sh ", env!("CARGO_PKG_VERSION"), app.theme.name);
     let help_text = if app.lesson_mode {
-        " [? help] [^L lessons] [m menu] [^A AI] [^T theme] [^S settings] [q quit] "
+        " [? help] [^L lessons] [m menu] [a achievements] [p progress] [c challenges] [^A AI] [^T theme] [q quit] "
     } else {
-        " [? help] [^L lessons] [^A AI] [^T theme] [^S settings] [q quit] "
+        " [? help] [^L lessons] [a achievements] [p progress] [c challenges] [^A AI] [^T theme] [q quit] "
     };
 
     let title_len = title.len();
@@ -136,6 +160,8 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
         analytics_summary.as_ref(),
         app.lesson_mode,
         app.virtual_fs.as_ref(),
+        &app.user_stats,
+        &app.challenge_manager,
     );
 
     // Right side: Split into shell, output, and explanation
