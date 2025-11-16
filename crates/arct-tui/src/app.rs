@@ -361,7 +361,7 @@ impl App {
 "#;
 
         let tagline = "Λ° Learn Shell Commands Interactively with AI";
-        let version = "v0.1.0-alpha";
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
 
         // Get terminal size for centering
         let (width, height) = crossterm::terminal::size()?;
@@ -491,8 +491,10 @@ impl App {
                             return Ok(());
                         }
                         KeyCode::Char(c) if c.is_ascii_digit() => {
-                            if let Some(num) = c.to_digit(10) {
-                                menu.select_by_number(num as usize);
+                            if let Some(digit) = c.to_digit(10) {
+                                // Map 1-9 to lessons 1-9, and 0 to lesson 10
+                                let lesson_num = if digit == 0 { 10 } else { digit as usize };
+                                menu.select_by_number(lesson_num);
                             }
                             return Ok(());
                         }
@@ -715,6 +717,169 @@ impl App {
         Ok(())
     }
 
+    /// Helper: Check if a flag exists in the command
+    fn has_flag(cmd: &arct_core::Command, flag: &str) -> bool {
+        cmd.flags.iter().any(|f| {
+            f.raw == flag ||
+            f.short == Some(flag.chars().nth(1).unwrap_or(' ')) ||
+            f.long.as_ref().map(|l| l == flag.trim_start_matches("--")).unwrap_or(false)
+        })
+    }
+
+    /// Execute command against virtual filesystem and return output
+    fn execute_virtual_fs_command(&mut self, cmd: &arct_core::Command) -> Option<String> {
+        if !self.lesson_mode {
+            return None;
+        }
+
+        let vfs = self.virtual_fs.as_mut()?;
+        let program = cmd.program.as_str();
+
+        match program {
+            "pwd" => {
+                let current = vfs.get_current_dir().display().to_string();
+                Some(format!("{}\n", current))
+            }
+
+            "ls" => {
+                // Check for -a flag (show hidden files)
+                let show_hidden = Self::has_flag(cmd, "-a") || Self::has_flag(cmd, "--all");
+
+                match vfs.list_directory(None) {
+                    Ok(mut entries) => {
+                        // Filter out hidden files if -a not specified
+                        if !show_hidden {
+                            entries.retain(|e| !e.name.starts_with('.'));
+                        }
+
+                        let mut output = String::new();
+                        for entry in entries {
+                            if entry.is_dir {
+                                output.push_str(&format!("{}{}/\n", icons::folder().content, entry.name));
+                            } else {
+                                output.push_str(&format!("{}{}\n", icons::file().content, entry.name));
+                            }
+                        }
+
+                        if output.is_empty() {
+                            output = "Empty directory\n".to_string();
+                        }
+
+                        Some(output)
+                    }
+                    Err(e) => Some(format!("{}ls: {}\n", icons::error().content, e)),
+                }
+            }
+
+            "cd" => {
+                let target = cmd.args.first().map(|s| s.as_str()).unwrap_or("~");
+                match vfs.change_directory(target) {
+                    Ok(new_path) => {
+                        Some(format!("{}Changed to: {}\n", icons::folder().content, new_path))
+                    }
+                    Err(e) => Some(format!("{}cd: {}\n", icons::error().content, e)),
+                }
+            }
+
+            "cat" => {
+                if cmd.args.is_empty() {
+                    return Some(format!("{}cat: missing file argument\n", icons::error().content));
+                }
+
+                let mut output = String::new();
+                for file in &cmd.args {
+                    match vfs.read_file(file) {
+                        Ok(content) => output.push_str(&content),
+                        Err(e) => output.push_str(&format!("{}cat: {}\n", icons::error().content, e)),
+                    }
+                }
+                Some(output)
+            }
+
+            "mkdir" => {
+                if cmd.args.is_empty() {
+                    return Some(format!("{}mkdir: missing directory name\n", icons::error().content));
+                }
+
+                let parents = Self::has_flag(cmd, "-p") || Self::has_flag(cmd, "--parents");
+                let mut output = String::new();
+
+                for dir in &cmd.args {
+                    match vfs.create_directory(dir, parents) {
+                        Ok(_) => output.push_str(&format!("{}Created directory: {}\n", icons::folder().content, dir)),
+                        Err(e) => output.push_str(&format!("{}mkdir: {}\n", icons::error().content, e)),
+                    }
+                }
+                Some(output)
+            }
+
+            "touch" => {
+                if cmd.args.is_empty() {
+                    return Some(format!("{}touch: missing file argument\n", icons::error().content));
+                }
+
+                let mut output = String::new();
+                for file in &cmd.args {
+                    match vfs.touch_file(file) {
+                        Ok(_) => output.push_str(&format!("{}Created/updated file: {}\n", icons::file().content, file)),
+                        Err(e) => output.push_str(&format!("{}touch: {}\n", icons::error().content, e)),
+                    }
+                }
+                Some(output)
+            }
+
+            "rm" => {
+                if cmd.args.is_empty() {
+                    return Some(format!("{}rm: missing file argument\n", icons::error().content));
+                }
+
+                let recursive = Self::has_flag(cmd, "-r") || Self::has_flag(cmd, "-R") || Self::has_flag(cmd, "--recursive");
+                let force = Self::has_flag(cmd, "-f") || Self::has_flag(cmd, "--force");
+                let mut output = String::new();
+
+                for item in &cmd.args {
+                    match vfs.remove(item, recursive, force) {
+                        Ok(_) => output.push_str(&format!("{}Removed: {}\n", icons::success().content, item)),
+                        Err(e) => output.push_str(&format!("{}rm: {}\n", icons::error().content, e)),
+                    }
+                }
+                Some(output)
+            }
+
+            "mv" => {
+                if cmd.args.len() < 2 {
+                    return Some(format!("{}mv: missing source or destination\n", icons::error().content));
+                }
+
+                let source = &cmd.args[0];
+                let dest = &cmd.args[1];
+
+                match vfs.move_item(source, dest) {
+                    Ok(_) => Some(format!("{}Moved {} to {}\n", icons::success().content, source, dest)),
+                    Err(e) => Some(format!("{}mv: {}\n", icons::error().content, e)),
+                }
+            }
+
+            "cp" => {
+                if cmd.args.len() < 2 {
+                    return Some(format!("{}cp: missing source or destination\n", icons::error().content));
+                }
+
+                let recursive = Self::has_flag(cmd, "-r") || Self::has_flag(cmd, "-R") || Self::has_flag(cmd, "--recursive");
+                let source = &cmd.args[0];
+                let dest = &cmd.args[1];
+
+                match vfs.copy(source, dest, recursive) {
+                    Ok(_) => Some(format!("{}Copied {} to {}\n", icons::success().content, source, dest)),
+                    Err(e) => Some(format!("{}cp: {}\n", icons::error().content, e)),
+                }
+            }
+
+            // Commands that don't manipulate the filesystem
+            _ => None,
+        }
+    }
+
     /// Execute the current command
     async fn execute_command(&mut self) -> Result<()> {
         // In lesson mode, allow empty commands (for Information steps that just need Enter)
@@ -769,110 +934,65 @@ impl App {
         // Parse command
         let cmd = self.analyzer.parse(&command_str)?;
 
-        // If in lesson mode and command is pwd, show virtual FS location
-        if self.lesson_mode && cmd.program == "pwd" {
-            if let Some(ref vfs) = self.virtual_fs {
-                let current = vfs.get_current_dir().display().to_string();
-                self.last_output = format!("{}\n\n{}Virtual lesson filesystem\n", current, icons::hint().content);
-                self.command_buffer.clear();
-                self.add_to_history(command_str.clone());
-
-                // Still validate for lessons
-                if let Some(ref mut lesson_panel) = self.lesson_panel {
-                    let validation = lesson_panel.validate_current_step("pwd");
-                    if validation.is_success() && !lesson_panel.next_step() {
-                        self.last_output.push_str(&format!("\n{}Lesson complete! Press Ctrl+L to exit.\n", icons::celebration().content));
-                    }
-                }
-                return Ok(());
-            }
-        }
-
-        // If in lesson mode and command is ls, show virtual FS contents
-        if self.lesson_mode && cmd.program == "ls" {
-            if let Some(ref vfs) = self.virtual_fs {
-                match vfs.list_directory(None) {
-                    Ok(entries) => {
-                        let mut output = String::new();
-
-                        // Format entries with colors
-                        for entry in entries {
-                            if entry.is_dir {
-                                output.push_str(&format!("{}{}/\n", icons::folder().content, entry.name));
-                            } else {
-                                output.push_str(&format!("{}{}\n", icons::file().content, entry.name));
-                            }
-                        }
-
-                        if output.is_empty() {
-                            output = "Empty directory\n".to_string();
-                        }
-
-                        output.push_str(&format!("\n{}Virtual lesson filesystem\n", icons::hint().content));
-                        self.last_output = output;
-                        self.command_buffer.clear();
-                        self.add_to_history(command_str.clone());
-
-                        // Still validate for lessons
-                        if let Some(ref mut lesson_panel) = self.lesson_panel {
-                            let validation = lesson_panel.validate_current_step(&command_str);
-                            if validation.is_success() && !lesson_panel.next_step() {
-                                self.last_output.push_str(&format!("\n{}Lesson complete! Press Ctrl+L to exit.\n", icons::celebration().content));
-                            }
-                        }
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        self.last_output = format!("{}ls: {}\n", icons::error().content, e);
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        // If in lesson mode, validate against current lesson step
+        // If in lesson mode, execute against virtual FS and validate
         if self.lesson_mode {
+            // Execute command against virtual filesystem and get output
+            let vfs_output = self.execute_virtual_fs_command(&cmd);
+
             // Extract lesson completion info outside the borrow scope
             let mut lesson_completed_info: Option<(String, arct_core::Difficulty)> = None;
 
             if let Some(ref mut lesson_panel) = self.lesson_panel {
                 let validation = lesson_panel.validate_current_step(&command_str);
 
+                // Build output: virtual FS output FIRST, then validation feedback
+                let mut output = String::new();
+
+                // Show the command output from virtual filesystem
+                if let Some(vfs_out) = vfs_output {
+                    output.push_str(&vfs_out);
+                    output.push('\n');
+                }
+
+                // Then show validation feedback
                 if validation.is_success() {
                     // Success! Move to next step
-                    self.last_output = format!("{}{}\n\nMoving to next step...\n",
+                    output.push_str(&format!("{}{}\n\n",
                         icons::success().content,
                         match &validation {
                             arct_core::ValidationResult::Success { message } => message,
-                            _ => "Success!",
+                            _ => "Correct!",
                         }
-                    );
+                    ));
 
                     if !lesson_panel.next_step() {
                         // Lesson complete! Extract info for later processing
                         if let Some(lesson) = lesson_panel.current_lesson.as_ref() {
                             lesson_completed_info = Some((lesson.id.clone(), lesson.difficulty));
                         }
-                        self.last_output.push_str(&format!("\n{}Congratulations! You've completed this lesson!\n\nPress Ctrl+L to exit lesson mode or 'm' to select another lesson.\n", icons::celebration().content));
+                        output.push_str(&format!("{}Congratulations! You've completed this lesson!\n\nPress Ctrl+L to exit lesson mode or 'm' to select another lesson.\n", icons::celebration().content));
+                    } else {
+                        output.push_str("Moving to next step...\n");
                     }
                 } else {
                     // Show validation failure
-                    self.last_output = match validation {
+                    output.push_str(&match validation {
                         arct_core::ValidationResult::Failure { message, hint } => {
-                            let mut output = format!("{}{}\n", icons::error().content, message);
+                            let mut fail_output = format!("{}{}\n", icons::error().content, message);
                             if let Some(h) = hint {
-                                output.push_str(&format!("\n{}Hint: {}\n", icons::hint().content, h));
+                                fail_output.push_str(&format!("\n{}Hint: {}\n", icons::hint().content, h));
                             }
-                            output.push_str("\nTry again!\n");
-                            output
+                            fail_output.push_str("\nTry again!\n");
+                            fail_output
                         }
                         arct_core::ValidationResult::Partial { message, progress } => {
                             format!("{}{} ({:.0}% correct)\n\nKeep trying!\n", icons::warning().content, message, progress)
                         }
                         _ => "Try again!\n".to_string(),
-                    };
+                    });
                 }
 
+                self.last_output = output;
                 self.command_buffer.clear();
                 self.add_to_history(command_str.clone());
             }

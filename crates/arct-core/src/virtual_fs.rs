@@ -247,6 +247,165 @@ impl VirtualFileSystem {
         nodes
     }
 
+    /// Read file contents (cat command)
+    pub fn read_file(&self, path: &str) -> Result<String> {
+        let real_path = self.resolve_path(path);
+
+        if !real_path.exists() {
+            anyhow::bail!("No such file or directory: {}", path);
+        }
+
+        if real_path.is_dir() {
+            anyhow::bail!("Is a directory: {}", path);
+        }
+
+        fs::read_to_string(&real_path)
+            .context(format!("Failed to read file: {}", path))
+    }
+
+    /// Create directory (mkdir command)
+    pub fn create_directory(&self, path: &str, parents: bool) -> Result<()> {
+        let real_path = self.resolve_path(path);
+
+        if real_path.exists() {
+            anyhow::bail!("File or directory already exists: {}", path);
+        }
+
+        if parents {
+            fs::create_dir_all(&real_path)
+        } else {
+            fs::create_dir(&real_path)
+        }
+        .context(format!("Failed to create directory: {}", path))
+    }
+
+    /// Create or update file (touch command)
+    pub fn touch_file(&self, path: &str) -> Result<()> {
+        let real_path = self.resolve_path(path);
+
+        if real_path.exists() {
+            // Update modification time
+            let metadata = fs::metadata(&real_path)?;
+            let permissions = metadata.permissions();
+            fs::set_permissions(&real_path, permissions)?;
+        } else {
+            // Create empty file
+            fs::write(&real_path, "")?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove file or directory (rm command)
+    pub fn remove(&self, path: &str, recursive: bool, force: bool) -> Result<()> {
+        let real_path = self.resolve_path(path);
+
+        if !real_path.exists() {
+            if force {
+                return Ok(()); // -f flag ignores non-existent files
+            }
+            anyhow::bail!("No such file or directory: {}", path);
+        }
+
+        if real_path.is_dir() {
+            if !recursive {
+                anyhow::bail!("Is a directory (use -r to remove): {}", path);
+            }
+            fs::remove_dir_all(&real_path)
+        } else {
+            fs::remove_file(&real_path)
+        }
+        .context(format!("Failed to remove: {}", path))
+    }
+
+    /// Move or rename file/directory (mv command)
+    pub fn move_item(&self, source: &str, destination: &str) -> Result<()> {
+        let source_path = self.resolve_path(source);
+        let dest_path = self.resolve_path(destination);
+
+        if !source_path.exists() {
+            anyhow::bail!("No such file or directory: {}", source);
+        }
+
+        // If destination is a directory, move into it with same name
+        let final_dest = if dest_path.exists() && dest_path.is_dir() {
+            dest_path.join(source_path.file_name().unwrap_or_default())
+        } else {
+            dest_path
+        };
+
+        fs::rename(&source_path, &final_dest)
+            .context(format!("Failed to move {} to {}", source, destination))
+    }
+
+    /// Copy file or directory (cp command)
+    pub fn copy(&self, source: &str, destination: &str, recursive: bool) -> Result<()> {
+        let source_path = self.resolve_path(source);
+        let dest_path = self.resolve_path(destination);
+
+        if !source_path.exists() {
+            anyhow::bail!("No such file or directory: {}", source);
+        }
+
+        if source_path.is_dir() {
+            if !recursive {
+                anyhow::bail!("Is a directory (use -r to copy): {}", source);
+            }
+
+            // Recursive directory copy
+            self.copy_dir_recursive(&source_path, &dest_path)?;
+        } else {
+            // File copy
+            let final_dest = if dest_path.exists() && dest_path.is_dir() {
+                dest_path.join(source_path.file_name().unwrap_or_default())
+            } else {
+                dest_path
+            };
+
+            fs::copy(&source_path, &final_dest)
+                .context(format!("Failed to copy {} to {}", source, destination))?;
+        }
+
+        Ok(())
+    }
+
+    /// Helper: Recursively copy directory
+    fn copy_dir_recursive(&self, source: &Path, destination: &Path) -> Result<()> {
+        fs::create_dir_all(destination)?;
+
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let dest_path = destination.join(entry.file_name());
+
+            if file_type.is_dir() {
+                self.copy_dir_recursive(&entry.path(), &dest_path)?;
+            } else {
+                fs::copy(entry.path(), dest_path)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Write content to file (for echo redirection, etc.)
+    pub fn write_file(&self, path: &str, content: &str, append: bool) -> Result<()> {
+        let real_path = self.resolve_path(path);
+
+        if append {
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&real_path)?;
+            file.write_all(content.as_bytes())?;
+        } else {
+            fs::write(&real_path, content)?;
+        }
+
+        Ok(())
+    }
+
     /// Clean up virtual filesystem
     pub fn cleanup(&self) -> Result<()> {
         if self.root.exists() {

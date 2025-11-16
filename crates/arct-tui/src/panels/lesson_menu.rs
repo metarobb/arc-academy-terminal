@@ -203,22 +203,40 @@ impl LessonMenuPanel {
         frame.render_widget(list, chunks[2]);
 
         // Controls help
-        let controls = Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("↑/↓", theme.style_accent()),
-                Span::raw(" or "),
-                Span::styled("j/k", theme.style_accent()),
-                Span::raw(" to navigate  |  "),
+        let total_lessons = lessons.len();
+        let quick_select_text = if total_lessons <= 10 {
+            vec![
                 Span::styled("1-9", theme.style_accent()),
-                Span::raw(" for quick select  |  "),
-                Span::styled("Enter", theme.style_accent()),
-                Span::raw(" to start lesson"),
-            ]),
+                Span::raw(" for lessons 1-9, "),
+                Span::styled("0", theme.style_accent()),
+                Span::raw(" for lesson 10  |  "),
+            ]
+        } else {
+            vec![
+                Span::styled("1-9,0", theme.style_accent()),
+                Span::raw(" for first 10, use "),
+                Span::styled("↑/↓", theme.style_accent()),
+                Span::raw(" for others  |  "),
+            ]
+        };
+
+        let mut control_line1 = vec![
+            Span::styled("↑/↓", theme.style_accent()),
+            Span::raw(" or "),
+            Span::styled("j/k", theme.style_accent()),
+            Span::raw(" navigate  |  "),
+        ];
+        control_line1.extend(quick_select_text);
+        control_line1.push(Span::styled("Enter", theme.style_accent()));
+        control_line1.push(Span::raw(" start"));
+
+        let controls = Paragraph::new(vec![
+            Line::from(control_line1),
             Line::from(vec![
                 Span::styled("Esc", theme.style_accent()),
                 Span::raw(" or "),
                 Span::styled("q", theme.style_accent()),
-                Span::raw(" to close menu"),
+                Span::raw(" close menu"),
             ]),
         ])
         .alignment(Alignment::Center);
