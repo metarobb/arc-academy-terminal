@@ -13,7 +13,8 @@ pub struct VirtualFileSystem {
     root: PathBuf,
     /// Current working directory (relative to root)
     current_dir: PathBuf,
-    /// Session ID for cleanup
+    /// Session ID for cleanup and debugging
+    #[allow(dead_code)]
     session_id: String,
 }
 

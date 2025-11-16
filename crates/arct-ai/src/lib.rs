@@ -14,8 +14,6 @@ pub mod types;
 pub use provider::{AIProvider, AIResponse, StreamingResponse};
 pub use types::{AIConfig, AIError, AIResult, Message, Role};
 
-use async_trait::async_trait;
-
 /// Factory for creating AI providers
 pub struct AIFactory;
 

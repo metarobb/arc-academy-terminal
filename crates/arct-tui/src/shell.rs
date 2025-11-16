@@ -1,12 +1,17 @@
 //! Real shell execution using PTY
+//!
+//! Note: This module contains infrastructure for real PTY-based shell execution,
+//! which is planned for future releases. Currently, the application uses a simpler
+//! command execution approach.
 
 use anyhow::Result;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize, PtySystem};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use vte::{Params, Parser, Perform};
 
-/// Shell executor using PTY
+/// Shell executor using PTY (reserved for future real shell integration)
+#[allow(dead_code)]
 pub struct ShellExecutor {
     pty_system: Box<dyn PtySystem>,
     output_buffer: Arc<Mutex<Vec<u8>>>,
@@ -23,6 +28,7 @@ impl ShellExecutor {
     }
 
     /// Execute a command and return the output (blocking version for internal use)
+    #[allow(dead_code)]
     fn execute_blocking(&mut self, command: &str) -> Result<String> {
         // Create a new PTY
         let pair = self.pty_system.openpty(PtySize {
@@ -144,7 +150,8 @@ impl Default for ShellExecutor {
     }
 }
 
-/// Strip ANSI escape codes from text
+/// Strip ANSI escape codes from text (reserved for future PTY output processing)
+#[allow(dead_code)]
 fn strip_ansi_codes(text: &str) -> String {
     let mut result = String::new();
     let mut parser = Parser::new();
@@ -159,6 +166,7 @@ fn strip_ansi_codes(text: &str) -> String {
     result
 }
 
+#[allow(dead_code)]
 struct StripAnsiPerformer<'a> {
     output: &'a mut String,
 }

@@ -3,7 +3,8 @@
 use crate::provider::{AIProvider, AIResponse, StreamingResponse};
 use crate::types::{AIResult, CompletionOptions, Message, AIError, Role};
 use async_trait::async_trait;
-use futures::stream::{self, StreamExt};
+// Reserved for streaming implementation
+// use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";

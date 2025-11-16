@@ -6,10 +6,9 @@ use arct_core::{UserStats, Difficulty};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
-use std::collections::HashMap;
 
 /// Progress panel for displaying user stats and progress
 pub struct ProgressPanel;

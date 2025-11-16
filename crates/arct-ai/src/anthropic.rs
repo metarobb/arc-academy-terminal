@@ -149,7 +149,8 @@ impl AIProvider for AnthropicProvider {
         _messages: &[Message],
         _options: Option<CompletionOptions>,
     ) -> AIResult<StreamingResponse> {
-        // TODO: Implement streaming support
+        // Streaming support planned for v0.3.0
+        // Will enable real-time token-by-token responses for better UX
         Err(AIError::ApiError(
             "Streaming not yet implemented for Anthropic".to_string(),
         ))

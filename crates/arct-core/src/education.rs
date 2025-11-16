@@ -53,7 +53,8 @@ pub struct Warning {
 /// Main educator that generates explanations
 pub struct Educator {
     analyzer: CommandAnalyzer,
-    tip_history: Vec<String>, // Track which tips we've shown
+    #[allow(dead_code)] // Reserved for future tip deduplication feature
+    tip_history: Vec<String>,
 }
 
 impl Educator {

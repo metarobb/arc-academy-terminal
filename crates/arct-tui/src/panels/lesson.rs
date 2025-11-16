@@ -4,8 +4,8 @@ use crate::icons;
 use crate::theme::Theme;
 use arct_core::{Lesson, LessonStep, StepType, ValidationResult, LessonValidator};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Padding, Paragraph, Wrap},
     Frame,
@@ -180,7 +180,7 @@ impl LessonPanel {
         frame: &mut Frame,
         area: Rect,
         lesson: &Lesson,
-        theme: &Theme,
+        _theme: &Theme,
         border_style: Style,
     ) {
         let progress = self.completion_percentage();
@@ -229,7 +229,7 @@ impl LessonPanel {
         // Render based on step type
         match &step.step_type {
             StepType::CommandExercise {
-                success_message, ..
+                 ..
             } => {
                 // Instruction
                 if !step.instruction.is_empty() {

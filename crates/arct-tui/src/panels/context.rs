@@ -135,7 +135,7 @@ impl ContextPanel {
                     nodes: &[arct_core::TreeNode],
                     items: &mut Vec<ListItem>,
                     theme: &Theme,
-                    prefix: &str,
+                    _prefix: &str,
                     is_last_at_level: &[bool],
                 ) {
                     for (i, node) in nodes.iter().enumerate() {

@@ -1,7 +1,7 @@
 //! User analytics and progress tracking
 
 use anyhow::Result;
-use chrono::{DateTime, Local, NaiveDate};
+use chrono::Local;
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
 
@@ -207,7 +207,7 @@ impl Analytics {
     /// Calculate skill level based on command diversity and usage
     pub fn get_skill_level(&self) -> Result<String> {
         let unique = self.get_unique_commands()?;
-        let total = self.get_total_commands()?;
+        let _total = self.get_total_commands()?; // Reserved for future skill calculation refinement
 
         let level = if unique < 5 {
             "Beginner"

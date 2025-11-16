@@ -2,7 +2,7 @@
 
 use crate::icons;
 use crate::theme::Theme;
-use arct_core::{Achievement, AchievementCategory, UserAchievements, all_achievements};
+use arct_core::{AchievementCategory, UserAchievements, all_achievements};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     text::{Line, Span},

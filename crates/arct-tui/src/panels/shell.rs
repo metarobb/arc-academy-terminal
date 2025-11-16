@@ -2,8 +2,7 @@
 
 use crate::theme::Theme;
 use ratatui::{
-    layout::{Alignment, Rect},
-    style::{Modifier, Style},
+    layout::Rect,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,

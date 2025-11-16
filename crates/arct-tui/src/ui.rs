@@ -6,7 +6,6 @@ use crate::panels::{
     context::ContextPanel,
     explanation::ExplanationPanel,
     help::HelpPanel,
-    lesson::LessonPanel,
     PanelId,
 };
 use crate::theme::Theme;

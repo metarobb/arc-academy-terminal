@@ -1,6 +1,6 @@
 //! Context detection and environment awareness
 
-use crate::types::{Error, Result};
+use crate::types::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -121,7 +121,7 @@ impl ContextDetector {
 
     /// Generate context-aware suggestions
     fn generate_suggestions(
-        path: &Path,
+        _path: &Path,
         project_type: &Option<ProjectType>,
         vcs: &Option<VcsType>,
     ) -> Vec<Suggestion> {

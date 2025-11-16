@@ -478,7 +478,7 @@ impl App {
         match event {
             Event::Key(key) => {
                 // If onboarding is active, handle onboarding events
-                if let Some(ref mut wizard) = self.onboarding {
+                if self.onboarding.is_some() {
                     return self.handle_onboarding_event(key).await;
                 }
 
@@ -1592,7 +1592,10 @@ impl App {
         messages.extend(self.ai_conversation.clone());
 
         // Get response from AI
-        let provider = self.ai_provider.as_ref().unwrap();
+        // SAFETY: ai_provider is guaranteed to be Some when ai_mode is true
+        // because toggle_ai_mode() checks ai_provider.is_some() before enabling
+        let provider = self.ai_provider.as_ref()
+            .expect("BUG: ai_provider must exist when ai_mode is true - this is a logic error");
         let response = provider.complete(&messages, None).await;
 
         self.ai_loading = false;
