@@ -19,7 +19,7 @@ use ratatui::{
 };
 
 /// Main UI drawing function
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.size();
 
     // Main layout: header + content
@@ -56,7 +56,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 
     // Draw lesson menu if active
-    if let Some(ref menu) = app.lesson_menu {
+    if let Some(ref mut menu) = app.lesson_menu {
         menu.render(
             frame,
             &app.theme,

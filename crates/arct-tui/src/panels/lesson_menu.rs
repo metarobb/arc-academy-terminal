@@ -15,6 +15,7 @@ use std::collections::HashSet;
 pub struct LessonMenuPanel {
     library: LessonLibrary,
     selected_index: usize,
+    scroll_offset: usize,
 }
 
 impl LessonMenuPanel {
@@ -22,6 +23,7 @@ impl LessonMenuPanel {
         Self {
             library: LessonLibrary::new(),
             selected_index: 0,
+            scroll_offset: 0,
         }
     }
 
@@ -45,6 +47,27 @@ impl LessonMenuPanel {
         }
     }
 
+    /// Ensure selected item is visible within the given height
+    fn ensure_visible(&mut self, visible_height: usize) {
+        // Each lesson takes 3 lines (title + description + blank line)
+        let lines_per_lesson = 3;
+        let visible_lessons = visible_height / lines_per_lesson;
+
+        if visible_lessons == 0 {
+            return;
+        }
+
+        // If selected is below visible area, scroll down
+        if self.selected_index >= self.scroll_offset + visible_lessons {
+            self.scroll_offset = self.selected_index.saturating_sub(visible_lessons - 1);
+        }
+
+        // If selected is above visible area, scroll up
+        if self.selected_index < self.scroll_offset {
+            self.scroll_offset = self.selected_index;
+        }
+    }
+
     /// Select lesson by number (1-indexed for user display)
     pub fn select_by_number(&mut self, number: usize) {
         let total = self.library.all().len();
@@ -61,7 +84,7 @@ impl LessonMenuPanel {
 
     /// Render the lesson menu overlay (centered popup)
     pub fn render(
-        &self,
+        &mut self,
         frame: &mut Frame,
         theme: &Theme,
         completed_lessons: &HashSet<String>,
@@ -149,11 +172,29 @@ impl LessonMenuPanel {
         let rec_list = List::new(rec_items);
         frame.render_widget(rec_list, chunks[1]);
 
-        // Lesson list
+        // Lesson list with scrolling
+        let list_area_height = chunks[2].height as usize;
+
+        // Ensure selected item is visible (do this before borrowing lessons)
+        self.ensure_visible(list_area_height);
+
         let lessons = self.library.all();
+
         let mut items = Vec::new();
 
-        for (idx, lesson) in lessons.iter().enumerate() {
+        // Calculate visible range
+        let lines_per_lesson = 3;
+        let visible_lessons = list_area_height / lines_per_lesson;
+        let end_idx = (self.scroll_offset + visible_lessons).min(lessons.len());
+
+        // Add scroll indicator at top if scrolled down
+        if self.scroll_offset > 0 {
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled("▲ ▲ ▲  Scroll up for more lessons  ▲ ▲ ▲", theme.style_dim()),
+            ])));
+        }
+
+        for (idx, lesson) in lessons.iter().enumerate().skip(self.scroll_offset).take(end_idx - self.scroll_offset) {
             let is_selected = idx == self.selected_index;
             let is_completed = completed_lessons.contains(&lesson.id);
 
@@ -197,6 +238,13 @@ impl LessonMenuPanel {
                 Line::from(description_line),
                 Line::from(""),
             ]));
+        }
+
+        // Add scroll indicator at bottom if there are more lessons below
+        if end_idx < lessons.len() {
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled("▼ ▼ ▼  Scroll down for more lessons  ▼ ▼ ▼", theme.style_dim()),
+            ])));
         }
 
         let list = List::new(items);
