@@ -178,6 +178,17 @@ impl Telemetry {
 
     /// Get telemetry statistics
     pub fn get_stats(&self) -> Result<TelemetryStats> {
+        // If telemetry is disabled, return empty stats
+        if !self.enabled {
+            return Ok(TelemetryStats {
+                total_commands: 0,
+                total_sessions: 0,
+                total_errors: 0,
+                top_commands: vec![],
+                features_used: vec![],
+            });
+        }
+
         let total_commands: i64 = self.db.query_row(
             "SELECT COUNT(*) FROM events WHERE event_type = 'command_executed'",
             [],

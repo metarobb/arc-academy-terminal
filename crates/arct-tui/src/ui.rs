@@ -17,9 +17,26 @@ use ratatui::{
     Frame,
 };
 
+/// Minimum terminal dimensions for usable display
+const MIN_WIDTH: u16 = 40;
+const MIN_HEIGHT: u16 = 12;
+
 /// Main UI drawing function
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.size();
+
+    // Check minimum terminal size
+    if size.width < MIN_WIDTH || size.height < MIN_HEIGHT {
+        let msg = format!(
+            "Terminal too small ({} x {})\nMinimum: {} x {}",
+            size.width, size.height, MIN_WIDTH, MIN_HEIGHT
+        );
+        let paragraph = Paragraph::new(msg)
+            .style(app.theme.style_warning())
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, size);
+        return;
+    }
 
     // Main layout: header + content
     let chunks = Layout::default()
@@ -86,24 +103,52 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 /// Draw the header
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
-    let title = format!("  {}ARC ACADEMY TERMINAL ", icons::lightning().content);
+    let width = area.width as usize;
+
+    // Responsive title - shorter on narrow terminals
+    let title = if width >= 60 {
+        format!("  {}ARC ACADEMY TERMINAL ", icons::lightning().content)
+    } else if width >= 40 {
+        format!(" {}ARCT ", icons::lightning().content)
+    } else {
+        format!("{}A", icons::lightning().content)
+    };
+
     let mode_indicator = if app.lesson_mode {
-        format!(" {}LESSON MODE ", icons::lesson().content)
+        if width >= 50 { format!(" {}LESSON ", icons::lesson().content) } else { String::new() }
     } else if app.ai_mode {
-        format!(" {}AI MODE ", icons::ai().content)
+        if width >= 50 { format!(" {}AI ", icons::ai().content) } else { String::new() }
     } else {
         String::new()
     };
-    let version = format!("v{} | {} | arcacademy.sh ", env!("CARGO_PKG_VERSION"), app.theme.name);
-    let help_text = if app.lesson_mode {
-        " [? help] [^L lessons] [m menu] [Alt+A achievements] [Alt+P progress] [Alt+C challenges] [^A AI] [^T theme] [q quit] "
+
+    // Responsive version info
+    let version = if width >= 80 {
+        format!("v{} | {} ", env!("CARGO_PKG_VERSION"), app.theme.name)
+    } else if width >= 50 {
+        format!("v{} ", env!("CARGO_PKG_VERSION"))
     } else {
-        " [? help] [^L lessons] [Alt+A achievements] [Alt+P progress] [Alt+C challenges] [^A AI] [^T theme] [q quit] "
+        String::new()
     };
 
-    let title_len = title.len();
-    let version_len = version.len();
-    let mode_len = mode_indicator.len();
+    // Responsive help text - progressively shorter
+    let help_text = if width >= 120 {
+        " [? help] [^L lessons] [^A AI] [^T theme] [q quit] "
+    } else if width >= 80 {
+        " [?] [^L] [^A] [^T] [q] "
+    } else if width >= 50 {
+        " [? help] "
+    } else {
+        ""
+    };
+
+    let title_len = title.chars().count();
+    let version_len = version.chars().count();
+    let mode_len = mode_indicator.chars().count();
+    let help_len = help_text.chars().count();
+
+    let used_width = title_len + mode_len + version_len + help_len;
+    let padding = width.saturating_sub(used_width + 2); // +2 for borders
 
     let mut spans = vec![
         Span::styled(&title, app.theme.style_accent().add_modifier(Modifier::BOLD)),
@@ -113,11 +158,17 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::styled(&mode_indicator, app.theme.style_success().add_modifier(Modifier::BOLD)));
     }
 
-    spans.push(Span::styled(version, app.theme.style_info()));
-    spans.push(Span::raw(" ".repeat(area.width.saturating_sub(
-        title_len as u16 + mode_len as u16 + version_len as u16 + help_text.len() as u16
-    ) as usize)));
-    spans.push(Span::styled(help_text, app.theme.style_dim()));
+    if !version.is_empty() {
+        spans.push(Span::styled(&version, app.theme.style_info()));
+    }
+
+    if padding > 0 {
+        spans.push(Span::raw(" ".repeat(padding)));
+    }
+
+    if !help_text.is_empty() {
+        spans.push(Span::styled(help_text, app.theme.style_dim()));
+    }
 
     let header_text = Line::from(spans);
 
@@ -133,45 +184,94 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
 
 /// Draw the main content area
 fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
-    // Layout: Left sidebar + Right main area
-    let main_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(30), // Context panel
-            Constraint::Percentage(70), // Shell + Explanation
-        ])
-        .split(area);
+    let width = area.width;
 
-    // Left: Context panel
-    let context_panel = ContextPanel::new();
+    // Responsive layout: hide context panel on very narrow terminals
+    let main_chunks = if width < 60 {
+        // Single column - no context panel
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(0), // Hide context panel
+                Constraint::Min(0),    // Shell + Explanation takes all
+            ])
+            .split(area)
+    } else if width < 100 {
+        // Narrower split for medium terminals
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(20),   // Context panel min 20
+                Constraint::Min(40),   // Shell + Explanation min 40
+            ])
+            .split(area)
+    } else {
+        // Standard split for wide terminals
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(30), // Context panel
+                Constraint::Percentage(70), // Shell + Explanation
+            ])
+            .split(area)
+    };
 
-    // Get analytics summary if available
-    let analytics_summary = app.analytics.as_ref()
-        .and_then(|a| a.get_summary().ok());
+    // Left: Context panel (only render if visible)
+    if main_chunks[0].width > 0 {
+        let context_panel = ContextPanel::new();
 
-    context_panel.render(
-        frame,
-        main_chunks[0],
-        app.active_panel == PanelId::Context,
-        &app.context,
-        &app.theme,
-        app.config.ai.enabled,
-        analytics_summary.as_ref(),
-        app.lesson_mode,
-        app.virtual_fs.as_ref(),
-        &app.user_stats,
-        &app.challenge_manager,
-    );
+        // Get analytics summary if available
+        let analytics_summary = app.analytics.as_ref()
+            .and_then(|a| a.get_summary().ok());
+
+        context_panel.render(
+            frame,
+            main_chunks[0],
+            app.active_panel == PanelId::Context,
+            &app.context,
+            &app.theme,
+            app.config.ai.enabled,
+            analytics_summary.as_ref(),
+            app.lesson_mode,
+            app.virtual_fs.as_ref(),
+            &app.user_stats,
+            &app.challenge_manager,
+        );
+    }
 
     // Right side: Split into shell, output, and explanation
-    let right_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),  // Shell input
-            Constraint::Percentage(40), // Command output
-            Constraint::Min(0),     // Explanation
-        ])
-        .split(main_chunks[1]);
+    let height = main_chunks[1].height;
+    let right_chunks = if height < 15 {
+        // Very short terminal - minimal layout
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),  // Shell input
+                Constraint::Min(0),     // Everything else to output
+                Constraint::Length(0),  // Hide explanation
+            ])
+            .split(main_chunks[1])
+    } else if height < 25 {
+        // Short terminal - compact layout
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),  // Shell input
+                Constraint::Percentage(50), // Command output
+                Constraint::Min(5),     // Explanation (smaller)
+            ])
+            .split(main_chunks[1])
+    } else {
+        // Standard layout
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),  // Shell input
+                Constraint::Percentage(40), // Command output
+                Constraint::Min(0),     // Explanation
+            ])
+            .split(main_chunks[1])
+    };
 
     // Shell panel
     draw_shell_panel(
@@ -196,29 +296,31 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
         &app.theme,
     );
 
-    // Explanation panel OR Lesson panel
-    if app.lesson_mode {
-        // Lesson mode - show interactive lessons
-        if let Some(ref lesson_panel) = app.lesson_panel {
-            lesson_panel.render(
+    // Explanation panel OR Lesson panel (only render if visible)
+    if right_chunks[2].height > 0 {
+        if app.lesson_mode {
+            // Lesson mode - show interactive lessons
+            if let Some(ref lesson_panel) = app.lesson_panel {
+                lesson_panel.render(
+                    frame,
+                    right_chunks[2],
+                    app.active_panel == PanelId::Explanation,
+                    &app.theme,
+                );
+            }
+        } else {
+            // Normal mode - show explanations
+            let explanation_panel = ExplanationPanel::new();
+            explanation_panel.render(
                 frame,
                 right_chunks[2],
                 app.active_panel == PanelId::Explanation,
+                app.last_explanation.as_ref(),
                 &app.theme,
+                app.ai_mode,
+                app.ai_response.as_deref(),
             );
         }
-    } else {
-        // Normal mode - show explanations
-        let explanation_panel = ExplanationPanel::new();
-        explanation_panel.render(
-            frame,
-            right_chunks[2],
-            app.active_panel == PanelId::Explanation,
-            app.last_explanation.as_ref(),
-            &app.theme,
-            app.ai_mode,
-            app.ai_response.as_deref(),
-        );
     }
 }
 
