@@ -288,12 +288,21 @@ impl LessonPanel {
                     }
                 }
 
+                // Clear, prominent instructions on what to do
                 items.push(ListItem::new(Line::from(vec![
-                    Span::styled("▶ ", theme.style_accent()),
-                    Span::styled(
-                        "Type the command in the shell panel and press Enter",
-                        theme.style_dim(),
-                    ),
+                    Span::styled("━━━ HOW TO COMPLETE ━━━", theme.style_warning()),
+                ])));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("1. ", theme.style_accent()),
+                    Span::styled("Look at the Shell panel below ($ prompt)", theme.style_normal()),
+                ])));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("2. ", theme.style_accent()),
+                    Span::styled("Type the command there", theme.style_normal()),
+                ])));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("3. ", theme.style_accent()),
+                    Span::styled("Press Enter to check your answer", theme.style_normal()),
                 ])));
             }
             StepType::MultipleChoice {
@@ -327,9 +336,14 @@ impl LessonPanel {
                     items.push(ListItem::new(Line::from("")));
                 }
 
+                // Clear instructions
                 items.push(ListItem::new(Line::from(vec![
-                    Span::styled(format!("{}  ", icons::ARROW_RIGHT), theme.style_accent()),
-                    Span::styled("Enter the number of your answer", theme.style_dim()),
+                    Span::styled("━━━ HOW TO ANSWER ━━━", theme.style_warning()),
+                ])));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("Type the number (0-", theme.style_normal()),
+                    Span::styled(format!("{}", options.len() - 1), theme.style_accent()),
+                    Span::styled(") in the Shell below, then press Enter", theme.style_normal()),
                 ])));
             }
             StepType::Information { content } => {
@@ -342,8 +356,12 @@ impl LessonPanel {
                 }
                 items.push(ListItem::new(Line::from("")));
                 items.push(ListItem::new(Line::from(vec![
-                    Span::styled("▶ ", theme.style_accent()),
-                    Span::styled("Press Enter to continue", theme.style_dim()),
+                    Span::styled("━━━ TO CONTINUE ━━━", theme.style_warning()),
+                ])));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("Press ", theme.style_normal()),
+                    Span::styled("Enter", theme.style_accent()),
+                    Span::styled(" in the Shell panel below to proceed", theme.style_normal()),
                 ])));
             }
             StepType::FillInBlank { template, .. } => {
@@ -355,6 +373,13 @@ impl LessonPanel {
                 items.push(ListItem::new(Line::from(vec![
                     Span::styled("Template: ", theme.style_accent()),
                     Span::styled(template, theme.style_dim()),
+                ])));
+                items.push(ListItem::new(Line::from("")));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("━━━ HOW TO COMPLETE ━━━", theme.style_warning()),
+                ])));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("Fill in the blank and type the full command in Shell below", theme.style_normal()),
                 ])));
             }
             StepType::Practice { goal, hints, .. } => {
@@ -377,6 +402,13 @@ impl LessonPanel {
                         ])));
                     }
                 }
+                items.push(ListItem::new(Line::from("")));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("━━━ HOW TO PRACTICE ━━━", theme.style_warning()),
+                ])));
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("Try commands in the Shell below to achieve the goal", theme.style_normal()),
+                ])));
             }
         }
 
