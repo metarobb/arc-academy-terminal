@@ -239,16 +239,17 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
         );
     }
 
-    // Right side: Split into shell, output, and explanation
+    // Right side: Classic terminal layout (Explanation → Output → Shell at bottom)
+    // This follows traditional terminal UX where input is at the bottom
     let height = main_chunks[1].height;
     let right_chunks = if height < 15 {
-        // Very short terminal - minimal layout
+        // Very short terminal - minimal layout (hide explanation)
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Shell input
-                Constraint::Min(0),     // Everything else to output
                 Constraint::Length(0),  // Hide explanation
+                Constraint::Min(0),     // Everything else to output
+                Constraint::Length(3),  // Shell input at bottom
             ])
             .split(main_chunks[1])
     } else if height < 25 {
@@ -256,54 +257,31 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Shell input
+                Constraint::Min(5),     // Explanation (smaller but visible)
                 Constraint::Percentage(50), // Command output
-                Constraint::Min(5),     // Explanation (smaller)
+                Constraint::Length(3),  // Shell input at bottom
             ])
             .split(main_chunks[1])
     } else {
-        // Standard layout
+        // Standard layout - explanation prominent for learning
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Shell input
+                Constraint::Percentage(35), // Explanation (learning focus)
                 Constraint::Percentage(40), // Command output
-                Constraint::Min(0),     // Explanation
+                Constraint::Length(3),  // Shell input at bottom
             ])
             .split(main_chunks[1])
     };
 
-    // Shell panel
-    draw_shell_panel(
-        frame,
-        right_chunks[0],
-        app.active_panel == PanelId::Shell,
-        &app.command_buffer,
-        &app.completion_suggestions,
-        &app.theme,
-        app.ai_mode,
-        &app.ai_input_buffer,
-        app.ai_loading,
-    );
-
-    // Output panel
-    draw_output_panel(
-        frame,
-        right_chunks[1],
-        app.active_panel == PanelId::Output,
-        &app.last_output,
-        app.output_scroll,
-        &app.theme,
-    );
-
-    // Explanation panel OR Lesson panel (only render if visible)
-    if right_chunks[2].height > 0 {
+    // Explanation panel OR Lesson panel (top - high visibility for learning)
+    if right_chunks[0].height > 0 {
         if app.lesson_mode {
             // Lesson mode - show interactive lessons
             if let Some(ref lesson_panel) = app.lesson_panel {
                 lesson_panel.render(
                     frame,
-                    right_chunks[2],
+                    right_chunks[0],
                     app.active_panel == PanelId::Explanation,
                     &app.theme,
                 );
@@ -313,7 +291,7 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             let explanation_panel = ExplanationPanel::new();
             explanation_panel.render(
                 frame,
-                right_chunks[2],
+                right_chunks[0],
                 app.active_panel == PanelId::Explanation,
                 app.last_explanation.as_ref(),
                 &app.theme,
@@ -322,6 +300,29 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             );
         }
     }
+
+    // Output panel (middle - shows command results)
+    draw_output_panel(
+        frame,
+        right_chunks[1],
+        app.active_panel == PanelId::Output,
+        &app.last_output,
+        app.output_scroll,
+        &app.theme,
+    );
+
+    // Shell panel (bottom - classic terminal position)
+    draw_shell_panel(
+        frame,
+        right_chunks[2],
+        app.active_panel == PanelId::Shell,
+        &app.command_buffer,
+        &app.completion_suggestions,
+        &app.theme,
+        app.ai_mode,
+        &app.ai_input_buffer,
+        app.ai_loading,
+    );
 }
 
 /// Draw the shell panel
@@ -438,9 +439,9 @@ fn draw_output_panel(
     };
 
     let title = if focused {
-        format!(" {}Output (Active - ↑↓ to scroll) ", icons::output().content)
+        format!(" {}Output (↑↓ scroll) ", icons::output().content)
     } else {
-        format!(" {}Output ", icons::output().content)
+        format!(" {}Output (^↑↓ scroll) ", icons::output().content)
     };
 
     let block = Block::default()

@@ -30,6 +30,8 @@ pub enum Action {
     ScrollDown,
     PageUp,
     PageDown,
+    ScrollOutputUp,    // Always scrolls output regardless of focus
+    ScrollOutputDown,  // Always scrolls output regardless of focus
     Enter,
     Escape,
     Help,
@@ -114,9 +116,17 @@ pub fn key_to_action(key: KeyEvent) -> Action {
         (KeyCode::Tab, KeyModifiers::NONE) => Action::NextPanel,
         (KeyCode::BackTab, KeyModifiers::SHIFT) => Action::PreviousPanel,
 
-        // Scrolling
-        (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::NONE) => Action::ScrollUp,
-        (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::NONE) => Action::ScrollDown,
+        // Output scrolling (works from any panel - Ctrl+Arrow or Ctrl+J/K)
+        (KeyCode::Up, KeyModifiers::CONTROL) => Action::ScrollOutputUp,
+        (KeyCode::Down, KeyModifiers::CONTROL) => Action::ScrollOutputDown,
+        (KeyCode::Char('j'), KeyModifiers::CONTROL) => Action::ScrollOutputDown,
+        // Note: Ctrl+K is CommandPalette, so use Alt+J/K as alternative
+        (KeyCode::Char('j'), KeyModifiers::ALT) => Action::ScrollOutputDown,
+        (KeyCode::Char('k'), KeyModifiers::ALT) => Action::ScrollOutputUp,
+
+        // Panel-specific scrolling (only when Output panel focused)
+        (KeyCode::Up, KeyModifiers::NONE) | (KeyCode::Char('k'), KeyModifiers::NONE) => Action::ScrollUp,
+        (KeyCode::Down, KeyModifiers::NONE) | (KeyCode::Char('j'), KeyModifiers::NONE) => Action::ScrollDown,
         (KeyCode::PageUp, _) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => Action::PageUp,
         (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => Action::PageDown,
 

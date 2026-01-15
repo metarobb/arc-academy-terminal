@@ -55,16 +55,18 @@ impl HelpPanel {
                 Span::raw("  →  Switch panels"),
             ])),
             ListItem::new(Line::from(vec![
+                Span::styled("  Ctrl+↑/↓", theme.style_accent()),
+                Span::raw("         →  Scroll output (any panel)"),
+            ])),
+            ListItem::new(Line::from(vec![
                 Span::styled("  ↑/↓", theme.style_accent()),
                 Span::raw(" or "),
                 Span::styled("j/k", theme.style_accent()),
-                Span::raw("       →  Scroll output"),
+                Span::raw("       →  Scroll (when Output focused)"),
             ])),
             ListItem::new(Line::from(vec![
                 Span::styled("  PgUp/PgDn", theme.style_accent()),
-                Span::raw(" or "),
-                Span::styled("Ctrl+u/d", theme.style_accent()),
-                Span::raw(" →  Page scroll output"),
+                Span::raw("        →  Page scroll output"),
             ])),
         ];
         frame.render_widget(List::new(nav_items), chunks[0]);

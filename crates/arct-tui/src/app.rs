@@ -616,13 +616,11 @@ impl App {
             }
             Action::NextPanel => {
                 self.active_panel = self.active_panel.next();
-                // Reset scroll when switching panels
-                self.output_scroll = 0;
+                // Don't reset scroll - users may want to keep reading output
             }
             Action::PreviousPanel => {
                 self.active_panel = self.active_panel.previous();
-                // Reset scroll when switching panels
-                self.output_scroll = 0;
+                // Don't reset scroll - users may want to keep reading output
             }
             Action::ScrollUp => {
                 // Only scroll when Output panel is focused
@@ -650,6 +648,17 @@ impl App {
                 if self.active_panel == PanelId::Output {
                     let total_lines = self.last_output.lines().count();
                     self.output_scroll = (self.output_scroll + 10).min(total_lines.saturating_sub(1));
+                }
+            }
+            Action::ScrollOutputUp => {
+                // Always scroll output regardless of which panel is focused
+                self.output_scroll = self.output_scroll.saturating_sub(1);
+            }
+            Action::ScrollOutputDown => {
+                // Always scroll output regardless of which panel is focused
+                let total_lines = self.last_output.lines().count();
+                if self.output_scroll < total_lines.saturating_sub(1) {
+                    self.output_scroll += 1;
                 }
             }
             Action::Help => {
