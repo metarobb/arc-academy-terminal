@@ -176,7 +176,8 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(app.theme.style_border_focused()),
+                .border_style(app.theme.style_border_focused())
+                .style(app.theme.style_block()),  // Set background for light themes
         );
 
     frame.render_widget(header, area);
@@ -358,7 +359,8 @@ fn draw_shell_panel(
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(theme.style_block());  // Set background for light themes
 
     // Build lines for the panel
     let mut lines = Vec::new();
@@ -447,7 +449,8 @@ fn draw_output_panel(
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(theme.style_block());  // Set background for light themes
 
     let inner_height = area.height.saturating_sub(2) as usize; // Subtract borders
 

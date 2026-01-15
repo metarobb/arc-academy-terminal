@@ -43,7 +43,8 @@ impl ContextPanel {
         let block = Block::default()
             .title(format!(" {}Learning Environment ", icons::globe().content))
             .borders(Borders::ALL)
-            .border_style(border_style);
+            .border_style(border_style)
+            .style(theme.style_block());  // Set background for light themes
 
         let mut items = Vec::new();
 

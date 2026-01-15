@@ -44,7 +44,8 @@ impl ExplanationPanel {
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(border_style);
+            .border_style(border_style)
+            .style(theme.style_block());  // Set background for light themes
 
         if ai_mode {
             // AI mode - show AI response

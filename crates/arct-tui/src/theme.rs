@@ -198,6 +198,12 @@ impl Theme {
             .bg(self.selection)
             .fg(self.fg_primary)
     }
+
+    /// Get a style for panel/block backgrounds
+    /// This ensures panels have the correct background color (important for light themes)
+    pub fn style_block(&self) -> Style {
+        Style::default().bg(self.bg_primary).fg(self.fg_primary)
+    }
 }
 
 impl Default for Theme {

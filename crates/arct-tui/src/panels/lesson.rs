@@ -180,7 +180,7 @@ impl LessonPanel {
         frame: &mut Frame,
         area: Rect,
         lesson: &Lesson,
-        _theme: &Theme,
+        theme: &Theme,
         border_style: Style,
     ) {
         let progress = self.completion_percentage();
@@ -198,7 +198,8 @@ impl LessonPanel {
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(border_style);
+            .border_style(border_style)
+            .style(theme.style_block());  // Set background for light themes
 
         frame.render_widget(block, area);
     }
@@ -397,6 +398,7 @@ impl LessonPanel {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
+            .style(theme.style_block())  // Set background for light themes
             .padding(Padding::uniform(1));
 
         let list = List::new(items).block(block);
@@ -413,7 +415,8 @@ impl LessonPanel {
         let block = Block::default()
             .title(format!(" {}Interactive Lessons ", icons::lesson().content))
             .borders(Borders::ALL)
-            .border_style(border_style);
+            .border_style(border_style)
+            .style(theme.style_block());  // Set background for light themes
 
         let paragraph = Paragraph::new(vec![
             Line::from(""),

@@ -100,7 +100,8 @@ impl LessonMenuPanel {
             .title(format!(" {}Lesson Selection Menu ", icons::lesson().content))
             .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
-            .border_style(theme.style_border_focused());
+            .border_style(theme.style_border_focused())
+            .style(theme.style_block());  // Set background for light themes
 
         let inner = block.inner(area);
         frame.render_widget(block, area);

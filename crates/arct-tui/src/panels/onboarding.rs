@@ -160,7 +160,8 @@ impl OnboardingWizard {
         let block = Block::default()
             .title(" Arc Academy Terminal - Setup ")
             .borders(Borders::ALL)
-            .border_style(theme.style_border_focused());
+            .border_style(theme.style_border_focused())
+            .style(theme.style_block());  // Set background for light themes
 
         let inner = block.inner(modal_area);
         frame.render_widget(block, modal_area);

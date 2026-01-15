@@ -568,9 +568,13 @@ impl App {
                             return Ok(());
                         }
                         KeyCode::Tab if key.modifiers == KeyModifiers::NONE => {
-                            // Tab in shell panel triggers autocomplete
-                            self.handle_autocomplete()?;
-                            return Ok(());
+                            // Tab in shell panel triggers autocomplete only if there's input
+                            // Otherwise, fall through to panel cycling
+                            if !self.command_buffer.is_empty() {
+                                self.handle_autocomplete()?;
+                                return Ok(());
+                            }
+                            // Empty buffer - let Tab fall through to cycle panels
                         }
                         KeyCode::Up => {
                             // Navigate backward in history (older commands)
