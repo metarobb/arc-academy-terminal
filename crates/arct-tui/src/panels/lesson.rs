@@ -4,10 +4,10 @@ use crate::icons;
 use crate::theme::Theme;
 use arct_core::{Lesson, LessonStep, StepType, ValidationResult, LessonValidator};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -153,21 +153,9 @@ impl LessonPanel {
         };
 
         if let Some(lesson) = &self.current_lesson {
-            // Split area into header and content
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(3), // Header
-                    Constraint::Min(0),    // Content
-                ])
-                .split(area);
-
-            // Render header with progress
-            self.render_header(frame, chunks[0], lesson, theme, border_style);
-
-            // Render current step
+            // Render current step (includes header info in title)
             if let Some(step) = self.current_step() {
-                self.render_step(frame, chunks[1], step, theme, border_style);
+                self.render_step(frame, area, lesson, step, theme, border_style);
             }
         } else {
             // No lesson loaded - show lesson selection screen
@@ -175,135 +163,76 @@ impl LessonPanel {
         }
     }
 
-    fn render_header(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        lesson: &Lesson,
-        theme: &Theme,
-        border_style: Style,
-    ) {
-        let progress = self.completion_percentage();
-        let step_count = format!(
-            "Step {}/{}",
-            self.current_step_index + 1,
-            lesson.steps.len()
-        );
-
-        let title = format!(
-            " {}{} | {} | {:.0}% ",
-            icons::lesson().content, lesson.title, step_count, progress
-        );
-
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .style(theme.style_block());  // Set background for light themes
-
-        frame.render_widget(block, area);
-    }
-
     fn render_step(
         &self,
         frame: &mut Frame,
         area: Rect,
+        lesson: &Lesson,
         step: &LessonStep,
         theme: &Theme,
         border_style: Style,
     ) {
-        let mut items = Vec::new();
+        let mut lines = Vec::new();
 
-        // Step title
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled("━".repeat(50), theme.style_dim()),
-        ])));
-        items.push(ListItem::new(Line::from(vec![
+        // Step title - always show
+        lines.push(Line::from(vec![
             Span::styled(format!("Step {}: ", step.step_number), theme.style_accent()),
             Span::styled(&step.title, theme.style_header()),
-        ])));
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled("━".repeat(50), theme.style_dim()),
-        ])));
-        items.push(ListItem::new(Line::from("")));
+        ]));
 
         // Render based on step type
         match &step.step_type {
-            StepType::CommandExercise {
-                 ..
-            } => {
-                // Instruction
+            StepType::CommandExercise { .. } => {
+                // HOW TO instruction
+                lines.push(Line::from(vec![
+                    Span::styled("▶ Type command in Shell → Enter", theme.style_warning()),
+                ]));
+                // Task instruction
                 if !step.instruction.is_empty() {
-                    items.push(ListItem::new(Line::from(vec![
-                        icons::note(),
+                    lines.push(Line::from(vec![
+                        Span::styled("Task: ", theme.style_accent()),
                         Span::styled(&step.instruction, theme.style_normal()),
-                    ])));
-                    items.push(ListItem::new(Line::from("")));
+                    ]));
                 }
-
                 // Hint
                 if let Some(hint) = &step.hint {
-                    items.push(ListItem::new(Line::from(vec![
+                    lines.push(Line::from(vec![
                         icons::hint(),
-                        Span::styled("Hint: ", theme.style_warning()),
                         Span::styled(hint, theme.style_dim()),
-                    ])));
-                    items.push(ListItem::new(Line::from("")));
+                    ]));
                 }
-
                 // Validation result
                 if let Some(validation) = &self.last_validation {
                     match validation {
                         ValidationResult::Success { message } => {
-                            items.push(ListItem::new(Line::from(vec![
+                            lines.push(Line::from(vec![
                                 icons::success(),
                                 Span::styled(message, theme.style_success()),
-                            ])));
-                            items.push(ListItem::new(Line::from("")));
+                            ]));
                         }
                         ValidationResult::Failure { message, hint } => {
-                            items.push(ListItem::new(Line::from(vec![
+                            lines.push(Line::from(vec![
                                 icons::error(),
                                 Span::styled(message, theme.style_error()),
-                            ])));
+                            ]));
                             if let Some(h) = hint {
-                                items.push(ListItem::new(Line::from(vec![
-                                    Span::styled("   ", theme.style_normal()),
+                                lines.push(Line::from(vec![
                                     icons::hint(),
                                     Span::styled(h, theme.style_dim()),
-                                ])));
+                                ]));
                             }
-                            items.push(ListItem::new(Line::from("")));
                         }
                         ValidationResult::Partial { message, progress } => {
-                            items.push(ListItem::new(Line::from(vec![
+                            lines.push(Line::from(vec![
                                 icons::warning(),
                                 Span::styled(
                                     format!("{} ({:.0}%)", message, progress),
                                     theme.style_warning(),
                                 ),
-                            ])));
-                            items.push(ListItem::new(Line::from("")));
+                            ]));
                         }
                     }
                 }
-
-                // Clear, prominent instructions on what to do
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("━━━ HOW TO COMPLETE ━━━", theme.style_warning()),
-                ])));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("1. ", theme.style_accent()),
-                    Span::styled("Look at the Shell panel below ($ prompt)", theme.style_normal()),
-                ])));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("2. ", theme.style_accent()),
-                    Span::styled("Type the command there", theme.style_normal()),
-                ])));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("3. ", theme.style_accent()),
-                    Span::styled("Press Enter to check your answer", theme.style_normal()),
-                ])));
             }
             StepType::MultipleChoice {
                 question,
@@ -311,130 +240,90 @@ impl LessonPanel {
                 explanation,
                 ..
             } => {
-                // Question
-                items.push(ListItem::new(Line::from(vec![
+                // HOW TO + Question combined
+                lines.push(Line::from(vec![
+                    Span::styled(format!("▶ Type 0-{} → ", options.len() - 1), theme.style_warning()),
                     icons::question(),
-                    Span::styled(question, theme.style_header()),
-                ])));
-                items.push(ListItem::new(Line::from("")));
-
+                    Span::styled(question, theme.style_normal()),
+                ]));
                 // Options
                 for (i, option) in options.iter().enumerate() {
-                    items.push(ListItem::new(Line::from(vec![
+                    lines.push(Line::from(vec![
                         Span::styled(format!("  {}. ", i), theme.style_accent()),
                         Span::styled(option, theme.style_normal()),
-                    ])));
+                    ]));
                 }
-                items.push(ListItem::new(Line::from("")));
-
                 // Show explanation if answered correctly
                 if let Some(ValidationResult::Success { .. }) = &self.last_validation {
-                    items.push(ListItem::new(Line::from(vec![
+                    lines.push(Line::from(vec![
                         icons::success(),
                         Span::styled(explanation, theme.style_success()),
-                    ])));
-                    items.push(ListItem::new(Line::from("")));
+                    ]));
                 }
-
-                // Clear instructions
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("━━━ HOW TO ANSWER ━━━", theme.style_warning()),
-                ])));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("Type the number (0-", theme.style_normal()),
-                    Span::styled(format!("{}", options.len() - 1), theme.style_accent()),
-                    Span::styled(") in the Shell below, then press Enter", theme.style_normal()),
-                ])));
             }
             StepType::Information { content } => {
-                // Display information with nice formatting
+                // HOW TO
+                lines.push(Line::from(vec![
+                    Span::styled("▶ Press Enter to continue", theme.style_warning()),
+                ]));
+                // Display information
                 for line in content.lines() {
-                    items.push(ListItem::new(Line::from(vec![Span::styled(
-                        line,
-                        theme.style_normal(),
-                    )])));
+                    lines.push(Line::from(vec![Span::styled(line, theme.style_normal())]));
                 }
-                items.push(ListItem::new(Line::from("")));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("━━━ TO CONTINUE ━━━", theme.style_warning()),
-                ])));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("Press ", theme.style_normal()),
-                    Span::styled("Enter", theme.style_accent()),
-                    Span::styled(" in the Shell panel below to proceed", theme.style_normal()),
-                ])));
             }
             StepType::FillInBlank { template, .. } => {
-                items.push(ListItem::new(Line::from(vec![
+                // HOW TO
+                lines.push(Line::from(vec![
+                    Span::styled("▶ Fill blank, type in Shell → Enter", theme.style_warning()),
+                ]));
+                lines.push(Line::from(vec![
                     icons::note(),
                     Span::styled(&step.instruction, theme.style_normal()),
-                ])));
-                items.push(ListItem::new(Line::from("")));
-                items.push(ListItem::new(Line::from(vec![
+                ]));
+                lines.push(Line::from(vec![
                     Span::styled("Template: ", theme.style_accent()),
                     Span::styled(template, theme.style_dim()),
-                ])));
-                items.push(ListItem::new(Line::from("")));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("━━━ HOW TO COMPLETE ━━━", theme.style_warning()),
-                ])));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("Fill in the blank and type the full command in Shell below", theme.style_normal()),
-                ])));
+                ]));
             }
             StepType::Practice { goal, hints, .. } => {
-                items.push(ListItem::new(Line::from(vec![
+                // HOW TO + Goal combined
+                lines.push(Line::from(vec![
+                    Span::styled("▶ Try commands → ", theme.style_warning()),
                     icons::target(),
-                    Span::styled("Goal: ", theme.style_info()),
                     Span::styled(goal, theme.style_normal()),
-                ])));
-                items.push(ListItem::new(Line::from("")));
-
+                ]));
+                // Hints inline
                 if !hints.is_empty() {
-                    items.push(ListItem::new(Line::from(vec![
-                        icons::hint(),
-                        Span::styled("Hints:", theme.style_warning()),
-                    ])));
                     for hint in hints {
-                        items.push(ListItem::new(Line::from(vec![
-                            Span::styled("  • ", theme.style_dim()),
+                        lines.push(Line::from(vec![
+                            icons::hint(),
                             Span::styled(hint, theme.style_dim()),
-                        ])));
+                        ]));
                     }
                 }
-                items.push(ListItem::new(Line::from("")));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("━━━ HOW TO PRACTICE ━━━", theme.style_warning()),
-                ])));
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("Try commands in the Shell below to achieve the goal", theme.style_normal()),
-                ])));
             }
         }
 
-        // Controls
-        items.push(ListItem::new(Line::from("")));
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled("━".repeat(50), theme.style_dim()),
-        ])));
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled("Controls: ", theme.style_dim()),
-            Span::styled("Tab", theme.style_accent()),
-            Span::styled(" = Next Panel | ", theme.style_dim()),
-            Span::styled("Ctrl+L", theme.style_accent()),
-            Span::styled(" = Next Step | ", theme.style_dim()),
-            Span::styled("Ctrl+H", theme.style_accent()),
-            Span::styled(" = Previous Step", theme.style_dim()),
-        ])));
+        // Build title with progress info (compact)
+        let progress = self.completion_percentage();
+        let title = format!(
+            " {} {}/{} | {:.0}% ",
+            lesson.title,
+            self.current_step_index + 1,
+            lesson.steps.len(),
+            progress
+        );
 
         let block = Block::default()
+            .title(title)
             .borders(Borders::ALL)
             .border_style(border_style)
-            .style(theme.style_block())  // Set background for light themes
-            .padding(Padding::uniform(1));
+            .style(theme.style_block());
 
-        let list = List::new(items).block(block);
-        frame.render_widget(list, area);
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
     }
 
     fn render_lesson_selection(
