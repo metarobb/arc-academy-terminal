@@ -244,6 +244,31 @@ impl Analytics {
 
         Ok(activity)
     }
+
+    /// Per-day activity flags for the last `days` days (oldest first):
+    /// `true` when at least one command was executed that day.
+    /// Used by the progress panel's streak calendar strip.
+    pub fn get_daily_activity(&self, days: usize) -> Result<Vec<bool>> {
+        let mut activity = Vec::with_capacity(days);
+
+        for days_ago in (0..days as i64).rev() {
+            let date = Local::now().naive_local().date() - chrono::Duration::days(days_ago);
+            let date_str = date.format("%Y-%m-%d").to_string();
+
+            let count: i64 = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM commands WHERE DATE(timestamp) = ?1",
+                    params![date_str],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            activity.push(count > 0);
+        }
+
+        Ok(activity)
+    }
 }
 
 /// User analytics summary for display

@@ -43,6 +43,7 @@ impl ExplanationPanel {
 
         let block = Block::default()
             .title(title)
+            .title_style(theme.style_title(focused))
             .borders(Borders::ALL)
             .border_style(border_style)
             .style(theme.style_block());  // Set background for light themes

@@ -1,9 +1,11 @@
 //! UI rendering and layout
 
 use crate::app::App;
+use crate::footer::{self, FooterMode};
 use crate::icons;
 use crate::panels::{
     context::ContextPanel,
+    dashboard,
     explanation::ExplanationPanel,
     help::HelpPanel,
     PanelId,
@@ -20,6 +22,69 @@ use ratatui::{
 /// Minimum terminal dimensions for usable display
 const MIN_WIDTH: u16 = 40;
 const MIN_HEIGHT: u16 = 12;
+
+/// Screen rectangles of the main panels, captured every frame so mouse
+/// clicks can be hit-tested against the live layout
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PanelRects {
+    pub context: Rect,
+    pub explanation: Rect,
+    pub output: Rect,
+    pub shell: Rect,
+}
+
+impl PanelRects {
+    /// Which panel (if any) contains the given screen position
+    pub fn panel_at(&self, column: u16, row: u16) -> Option<PanelId> {
+        let hit = |r: Rect| {
+            r.width > 0
+                && r.height > 0
+                && column >= r.x
+                && column < r.x + r.width
+                && row >= r.y
+                && row < r.y + r.height
+        };
+        if hit(self.shell) {
+            Some(PanelId::Shell)
+        } else if hit(self.output) {
+            Some(PanelId::Output)
+        } else if hit(self.explanation) {
+            Some(PanelId::Explanation)
+        } else if hit(self.context) {
+            Some(PanelId::Context)
+        } else {
+            None
+        }
+    }
+}
+
+/// Derive the footer hint mode from the current app state,
+/// mirroring the input-capture priority order in `App::handle_event`
+pub fn footer_mode(app: &App) -> FooterMode {
+    if app.showing_notification.is_some() {
+        FooterMode::Notification
+    } else if app.command_palette.is_some() {
+        FooterMode::Palette
+    } else if app.settings_panel.is_some() {
+        FooterMode::Settings
+    } else if app.lesson_menu.is_some() {
+        FooterMode::LessonMenu
+    } else if app.show_help
+        || app.achievements_panel.is_some()
+        || app.progress_panel.is_some()
+        || app.challenges_panel.is_some()
+    {
+        FooterMode::Overlay
+    } else if app.lesson_mode {
+        FooterMode::Lesson
+    } else if app.ai_mode {
+        FooterMode::Ai
+    } else if app.show_dashboard {
+        FooterMode::Dashboard
+    } else {
+        FooterMode::Normal
+    }
+}
 
 /// Main UI drawing function
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -38,12 +103,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Main layout: header + content
+    // Main layout: header + content + footer hint bar
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header
             Constraint::Min(0),    // Content
+            Constraint::Length(1), // Footer hint bar
         ])
         .split(size);
 
@@ -52,6 +118,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Draw main content
     draw_content(frame, chunks[1], app);
+
+    // Persistent, context-sensitive footer hint bar
+    footer::render(frame, chunks[2], &app.theme, footer_mode(app));
 
     // Draw onboarding wizard if active (highest priority)
     if let Some(ref wizard) = app.onboarding {
@@ -79,25 +148,41 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             &app.completed_lessons,
             &app.user_stats,
             &app.recommendation_engine,
+            &app.lesson_progress,
         );
     }
 
     // Draw gamification panels if active
-    if let Some(ref panel) = app.achievements_panel {
+    if let Some(ref mut panel) = app.achievements_panel {
         panel.render(frame, &app.theme, &app.user_stats.achievements);
     }
 
     if let Some(ref panel) = app.progress_panel {
-        panel.render(frame, &app.theme, &app.user_stats);
+        let activity = app
+            .analytics
+            .as_ref()
+            .and_then(|a| a.get_daily_activity(14).ok());
+        panel.render(
+            frame,
+            &app.theme,
+            &app.user_stats,
+            &app.lesson_library,
+            activity.as_deref(),
+        );
     }
 
     if let Some(ref panel) = app.challenges_panel {
         panel.render(frame, &app.theme, &app.challenge_manager);
     }
 
-    // Achievement notification has highest priority (render last)
+    // Command palette overlays everything except notifications
+    if let Some(ref mut palette) = app.command_palette {
+        palette.render(frame, &app.theme);
+    }
+
+    // Notification popups have highest priority (render last)
     if let Some(ref notification) = app.showing_notification {
-        notification.render(frame, &app.theme);
+        notification.render(frame, &app.theme, app.notification_ticks);
     }
 }
 
@@ -184,7 +269,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Draw the main content area
-fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_content(frame: &mut Frame, area: Rect, app: &mut App) {
     let width = area.width;
 
     // Responsive layout: hide context panel on very narrow terminals
@@ -215,6 +300,13 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
                 Constraint::Percentage(70), // Shell + Explanation
             ])
             .split(area)
+    };
+
+    // Remember panel geometry for mouse hit-testing (right side rects are
+    // filled in below once the vertical split is computed)
+    app.panel_rects = PanelRects {
+        context: main_chunks[0],
+        ..Default::default()
     };
 
     // Left: Context panel (only render if visible)
@@ -275,6 +367,10 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             .split(main_chunks[1])
     };
 
+    app.panel_rects.explanation = right_chunks[0];
+    app.panel_rects.output = right_chunks[1];
+    app.panel_rects.shell = right_chunks[2];
+
     // Explanation panel OR Lesson panel (top - high visibility for learning)
     if right_chunks[0].height > 0 {
         if app.lesson_mode {
@@ -285,6 +381,7 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
                     right_chunks[0],
                     app.active_panel == PanelId::Explanation,
                     &app.theme,
+                    app.config.lessons.is_real(),
                 );
             }
         } else {
@@ -302,15 +399,33 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    // Output panel (middle - shows command results)
-    draw_output_panel(
-        frame,
-        right_chunks[1],
-        app.active_panel == PanelId::Output,
-        &app.last_output,
-        app.output_scroll,
-        &app.theme,
-    );
+    // Output panel (middle - shows command results), or the welcome
+    // dashboard until the user's first keypress
+    if app.show_dashboard {
+        let data = dashboard::DashboardData {
+            user_name: app.config.general.user_name.clone(),
+            streak_days: app.user_stats.current_streak,
+            level: crate::level::level_info(&app.user_stats),
+            lessons_completed: app.completed_lessons.len(),
+            lessons_total: app.lesson_library.all().len(),
+            daily_challenge: Some(app.challenge_manager.get_daily_challenge().title),
+            next_lesson: app
+                .recommendation_engine
+                .get_recommendations(&app.completed_lessons, &app.user_stats, 1)
+                .first()
+                .map(|r| r.lesson.title.clone()),
+        };
+        dashboard::render(frame, right_chunks[1], &app.theme, &data);
+    } else {
+        draw_output_panel(
+            frame,
+            right_chunks[1],
+            app.active_panel == PanelId::Output,
+            &app.last_output,
+            app.output_scroll,
+            &app.theme,
+        );
+    }
 
     // Shell panel (bottom - classic terminal position)
     draw_shell_panel(
@@ -358,6 +473,7 @@ fn draw_shell_panel(
 
     let block = Block::default()
         .title(title)
+        .title_style(theme.style_title(focused))
         .borders(Borders::ALL)
         .border_style(border_style)
         .style(theme.style_block());  // Set background for light themes
@@ -448,6 +564,7 @@ fn draw_output_panel(
 
     let block = Block::default()
         .title(title)
+        .title_style(theme.style_title(focused))
         .borders(Borders::ALL)
         .border_style(border_style)
         .style(theme.style_block());  // Set background for light themes

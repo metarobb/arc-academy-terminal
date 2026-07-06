@@ -12,6 +12,8 @@ pub mod achievements;
 pub mod progress;
 pub mod challenges;
 pub mod notification;
+pub mod command_palette;
+pub mod dashboard;
 
 use ratatui::{layout::Rect, Frame};
 

@@ -134,6 +134,79 @@ impl Theme {
         }
     }
 
+    /// "Night" theme — deep blue/purple background with cyan/blue accents
+    /// (Tokyo-night-style palette)
+    pub fn night() -> Self {
+        Self {
+            name: "Night".to_string(),
+
+            bg_primary: Color::Rgb(26, 27, 38),      // #1a1b26 - Deep night blue
+            bg_secondary: Color::Rgb(22, 22, 30),    // #16161e - Darker
+            bg_tertiary: Color::Rgb(41, 42, 60),     // #292a3c - Raised surface
+
+            fg_primary: Color::Rgb(192, 202, 245),   // #c0caf5 - Pale periwinkle
+            fg_secondary: Color::Rgb(169, 177, 214), // #a9b1d6 - Muted lavender
+            fg_dim: Color::Rgb(86, 95, 137),         // #565f89 - Storm gray
+
+            accent: Color::Rgb(122, 162, 247),       // #7aa2f7 - Night blue
+            success: Color::Rgb(158, 206, 106),      // #9ece6a - Spring green
+            warning: Color::Rgb(224, 175, 104),      // #e0af68 - Amber
+            error: Color::Rgb(247, 118, 142),        // #f7768e - Rose
+            info: Color::Rgb(125, 207, 255),         // #7dcfff - Sky cyan
+
+            border: Color::Rgb(59, 66, 97),          // #3b4261
+            border_focused: Color::Rgb(187, 154, 247), // #bb9af7 - Purple glow
+            selection: Color::Rgb(52, 59, 88),       // #343b58 - Indigo wash
+        }
+    }
+
+    /// "Mocha" theme — soft pastels on a warm dark base
+    /// (Catppuccin-mocha-style palette with mauve/peach accents)
+    pub fn mocha() -> Self {
+        Self {
+            name: "Mocha".to_string(),
+
+            bg_primary: Color::Rgb(30, 30, 46),      // #1e1e2e - Base
+            bg_secondary: Color::Rgb(24, 24, 37),    // #181825 - Mantle
+            bg_tertiary: Color::Rgb(49, 50, 68),     // #313244 - Surface
+
+            fg_primary: Color::Rgb(205, 214, 244),   // #cdd6f4 - Text
+            fg_secondary: Color::Rgb(166, 173, 200), // #a6adc8 - Subtext
+            fg_dim: Color::Rgb(127, 132, 156),       // #7f849c - Overlay
+
+            accent: Color::Rgb(203, 166, 247),       // #cba6f7 - Mauve
+            success: Color::Rgb(166, 227, 161),      // #a6e3a1 - Green
+            warning: Color::Rgb(250, 179, 135),      // #fab387 - Peach
+            error: Color::Rgb(243, 139, 168),        // #f38ba8 - Pink
+            info: Color::Rgb(137, 220, 235),         // #89dceb - Sky
+
+            border: Color::Rgb(69, 71, 90),          // #45475a
+            border_focused: Color::Rgb(203, 166, 247), // #cba6f7 - Mauve
+            selection: Color::Rgb(88, 91, 112),      // #585b70
+        }
+    }
+
+    /// Every registered theme, in Ctrl+T cycle order.
+    ///
+    /// This is the single registry: `cycle_next`, `from_name`, the command
+    /// palette, the settings hint, and the `--theme` CLI flag all derive
+    /// their theme lists from here.
+    pub fn all() -> Vec<Theme> {
+        vec![
+            Self::arc_academy_orange(),
+            Self::arc_academy_green(),
+            Self::arc_dark(),
+            Self::arc_light(),
+            Self::night(),
+            Self::mocha(),
+        ]
+    }
+
+    /// Names of every registered theme, in cycle order
+    pub fn all_names() -> Vec<String> {
+        Self::all().into_iter().map(|t| t.name).collect()
+    }
+
     /// Get a style for normal text
     pub fn style_normal(&self) -> Style {
         Style::default().fg(self.fg_primary).bg(self.bg_primary)
@@ -204,6 +277,30 @@ impl Theme {
     pub fn style_block(&self) -> Style {
         Style::default().bg(self.bg_primary).fg(self.fg_primary)
     }
+
+    /// Panel title style: bold accent when the panel is focused, dim when not.
+    /// Use together with `style_border_focused`/`style_border` so the active
+    /// panel is unmistakable.
+    pub fn style_title(&self, focused: bool) -> Style {
+        if focused {
+            Style::default().fg(self.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(self.fg_dim)
+        }
+    }
+
+    /// Style for the footer hint bar background strip
+    pub fn style_footer(&self) -> Style {
+        Style::default().bg(self.bg_tertiary).fg(self.fg_dim)
+    }
+
+    /// Style for key "chips" in the footer hint bar
+    pub fn style_footer_key(&self) -> Style {
+        Style::default()
+            .bg(self.bg_tertiary)
+            .fg(self.accent)
+            .add_modifier(Modifier::BOLD)
+    }
 }
 
 impl Default for Theme {
@@ -213,27 +310,79 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Cycle to the next theme
+    /// Cycle to the next theme (Ctrl+T) — wraps around the full registry
     pub fn cycle_next(&self) -> Self {
-        match self.name.as_str() {
-            "Arc Academy Orange" => Self::arc_academy_green(),
-            "Arc Academy Green" => Self::arc_dark(),
-            "Arc Dark" => Self::arc_light(),
-            _ => Self::arc_academy_orange(),
+        let themes = Self::all();
+        let idx = themes.iter().position(|t| t.name == self.name);
+        match idx {
+            Some(i) => themes[(i + 1) % themes.len()].clone(),
+            None => Self::default(),
         }
     }
 
-    /// Get theme by name
+    /// Get theme by name (exact match against the registry)
     pub fn from_name(name: &str) -> Self {
-        match name {
-            "Arc Academy Orange" => Self::arc_academy_orange(),
-            "Arc Academy Green" => Self::arc_academy_green(),
-            "Arc Dark" => Self::arc_dark(),
-            "Arc Light" => Self::arc_light(),
-            _ => {
+        match Self::all().into_iter().find(|t| t.name == name) {
+            Some(theme) => theme,
+            None => {
                 tracing::warn!("Unknown theme '{}', using default", name);
                 Self::default()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_registry_has_six_unique_themes() {
+        let names = Theme::all_names();
+        assert_eq!(names.len(), 6);
+        let unique: HashSet<_> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "theme names must be unique");
+        for expected in [
+            "Arc Academy Orange",
+            "Arc Academy Green",
+            "Arc Dark",
+            "Arc Light",
+            "Night",
+            "Mocha",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "registry is missing theme '{}'",
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_name_roundtrip_for_every_registered_theme() {
+        for name in Theme::all_names() {
+            assert_eq!(Theme::from_name(&name).name, name);
+        }
+    }
+
+    #[test]
+    fn test_from_name_unknown_falls_back_to_default() {
+        assert_eq!(Theme::from_name("Solarized").name, Theme::default().name);
+    }
+
+    #[test]
+    fn test_cycle_visits_every_theme_and_wraps() {
+        let mut theme = Theme::default();
+        let mut visited = Vec::new();
+        for _ in 0..Theme::all().len() {
+            visited.push(theme.name.clone());
+            theme = theme.cycle_next();
+        }
+        // After a full cycle we're back at the start
+        assert_eq!(theme.name, Theme::default().name);
+        // And every registered theme was visited exactly once
+        let unique: HashSet<_> = visited.iter().collect();
+        assert_eq!(unique.len(), Theme::all().len());
     }
 }

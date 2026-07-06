@@ -31,7 +31,7 @@ impl AchievementsPanel {
     }
 
     /// Render the achievements overlay (centered popup)
-    pub fn render(&self, frame: &mut Frame, theme: &Theme, user_achievements: &UserAchievements) {
+    pub fn render(&mut self, frame: &mut Frame, theme: &Theme, user_achievements: &UserAchievements) {
         let area = Self::centered_rect(75, 70, frame.size());
 
         // Clear the background
@@ -161,16 +161,25 @@ impl AchievementsPanel {
             }
         }
 
-        let list = List::new(items);
+        // Apply scrolling: clamp the offset and skip past scrolled-off items
+        let max_offset = items.len().saturating_sub(1);
+        if self.scroll_offset > max_offset {
+            self.scroll_offset = max_offset;
+        }
+        let visible: Vec<ListItem> = items.into_iter().skip(self.scroll_offset).collect();
+
+        let list = List::new(visible);
         frame.render_widget(list, chunks[1]);
 
         // Controls help
         let controls = Paragraph::new(vec![Line::from(vec![
             Span::styled("↑/↓", theme.style_accent()),
+            Span::raw(" or "),
+            Span::styled("j/k", theme.style_accent()),
             Span::raw(" to scroll  |  "),
             Span::styled("Esc", theme.style_accent()),
             Span::raw(" or "),
-            Span::styled("a", theme.style_accent()),
+            Span::styled("Alt+A", theme.style_accent()),
             Span::raw(" to close"),
         ])])
         .alignment(Alignment::Center);

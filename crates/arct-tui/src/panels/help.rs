@@ -37,9 +37,9 @@ impl HelpPanel {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(7),  // Navigation
+                Constraint::Length(8),  // Navigation
                 Constraint::Length(6),  // Editing
-                Constraint::Length(5),  // Actions
+                Constraint::Length(10), // Actions
                 Constraint::Min(1),     // Info
             ])
             .split(inner);
@@ -68,6 +68,10 @@ impl HelpPanel {
             ListItem::new(Line::from(vec![
                 Span::styled("  PgUp/PgDn", theme.style_accent()),
                 Span::raw("        →  Page scroll output"),
+            ])),
+            ListItem::new(Line::from(vec![
+                Span::styled("  Mouse", theme.style_accent()),
+                Span::raw("             →  Click to focus, wheel to scroll"),
             ])),
         ];
         frame.render_widget(List::new(nav_items), chunks[0]);
@@ -98,8 +102,28 @@ impl HelpPanel {
                 Span::styled("Actions", theme.style_header()),
             ])),
             ListItem::new(Line::from(vec![
+                Span::styled("  Ctrl+k", theme.style_accent()),
+                Span::raw("           →  Command palette (all actions)"),
+            ])),
+            ListItem::new(Line::from(vec![
                 Span::styled("  Ctrl+t", theme.style_accent()),
                 Span::raw("           →  Toggle theme"),
+            ])),
+            ListItem::new(Line::from(vec![
+                Span::styled("  Ctrl+l", theme.style_accent()),
+                Span::raw(" / "),
+                Span::styled("m", theme.style_accent()),
+                Span::raw("       →  Lesson mode / lesson map"),
+            ])),
+            ListItem::new(Line::from(vec![
+                Span::styled("  Alt+←", theme.style_accent()),
+                Span::raw(" / "),
+                Span::styled("Alt+r", theme.style_accent()),
+                Span::raw("    →  Previous lesson step / restart lesson"),
+            ])),
+            ListItem::new(Line::from(vec![
+                Span::styled("  Alt+a/p/c", theme.style_accent()),
+                Span::raw("        →  Achievements / Progress / Challenges"),
             ])),
             ListItem::new(Line::from(vec![
                 Span::styled("  q", theme.style_accent()),

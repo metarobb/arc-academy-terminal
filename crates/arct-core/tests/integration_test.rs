@@ -29,26 +29,44 @@ fn test_lesson_validation_flow() {
 
     assert!(!lessons.is_empty(), "Should have lessons available");
 
-    // Get first lesson
-    let lesson = &lessons[0];
+    // Use a known lesson and step so the test is deterministic:
+    // nav-basics step 1 expects `pwd` with CommandOnly validation.
+    let lesson = library.get("nav-basics").expect("nav-basics lesson should exist");
     assert!(!lesson.steps.is_empty(), "Lesson should have steps");
 
-    // Test validation
     let validator = LessonValidator::new();
     let first_step = &lesson.steps[0];
 
-    // Validation should work for the step type
     match &first_step.step_type {
         StepType::CommandExercise { expected_command, validation, .. } => {
-            let result = validator.validate_command(
-                expected_command,
-                expected_command,
-                validation
-            );
-            assert!(result.is_success(), "Valid command should pass validation");
+            // Matching input passes
+            let result = validator.validate_command("pwd", expected_command, validation);
+            assert!(result.is_success(), "Matching command should pass validation");
+
+            // Non-matching input fails
+            let result = validator.validate_command("ls -la", expected_command, validation);
+            assert!(!result.is_success(), "Wrong command should fail validation");
+
+            // Empty input fails
+            let result = validator.validate_command("", expected_command, validation);
+            assert!(!result.is_success(), "Empty input should fail validation");
         }
-        _ => {
-            // Other step types are valid too
+        other => panic!("nav-basics step 1 should be a CommandExercise, got {:?}", other),
+    }
+
+    // Every CommandExercise/Practice validation in the library must reject
+    // empty input (no silent stub passes)
+    for lesson in library.all() {
+        for step in &lesson.steps {
+            if let StepType::CommandExercise { expected_command, validation, .. } = &step.step_type {
+                let result = validator.validate_command("", expected_command, validation);
+                assert!(
+                    !result.is_success(),
+                    "Lesson '{}' step {} accepted empty input",
+                    lesson.id,
+                    step.step_number
+                );
+            }
         }
     }
 }
@@ -143,4 +161,47 @@ fn test_dangerous_command_detection() {
 
     // Should have warnings for dangerous command
     assert!(!explanation.warnings.is_empty(), "Should warn about dangerous command");
+}
+
+#[test]
+fn test_playground_real_practice_flow() {
+    // End-to-end flow of real-filesystem practice mode: open the playground,
+    // enter a lesson (starter files materialize), guard the commands a
+    // learner would type, and reset back to pristine starter files.
+    let root = std::env::temp_dir().join(format!(
+        "arct-integration-playground-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+
+    let mut playground = Playground::open(root.clone()).expect("playground should open");
+
+    // Built-in lesson setup materializes into <root>/<lesson-id>/
+    let library = LessonLibrary::new();
+    let lesson = library.get("file-viewing").expect("lesson exists");
+    let dir = playground
+        .enter_lesson(&lesson.id, &lesson.setup)
+        .expect("enter_lesson should succeed");
+    assert!(dir.join("server.log").exists());
+    assert!(dir.join("notes.txt").exists());
+
+    // Guard: normal lesson commands pass, escapes and disasters are refused
+    let guard = PlaygroundGuard::new(playground.root());
+    assert!(guard.check("grep http server.log", playground.cwd()).is_allowed());
+    assert!(guard.check("head -n 5 server.log", playground.cwd()).is_allowed());
+    assert!(!guard.check("cat /etc/hostname", playground.cwd()).is_allowed());
+    assert!(!guard.check("rm -rf /", playground.cwd()).is_allowed());
+    assert!(!guard.check("cd .. && cat ../secret", playground.cwd()).is_allowed());
+
+    // cd persists inside the playground and refuses to leave it
+    playground.change_directory("..").expect("cd to playground root is fine");
+    assert!(playground.change_directory("..").is_err());
+
+    // Reset wipes learner changes and restores starter files
+    std::fs::write(dir.join("server.log"), "clobbered").unwrap();
+    playground.reset_lesson().expect("reset should succeed");
+    let restored = std::fs::read_to_string(dir.join("server.log")).unwrap();
+    assert!(restored.contains("http server started"));
+
+    let _ = std::fs::remove_dir_all(&root);
 }

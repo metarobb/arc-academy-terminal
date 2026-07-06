@@ -124,6 +124,10 @@ pub struct App {
     /// Virtual filesystem for lesson sandboxing
     pub virtual_fs: Option<arct_core::VirtualFileSystem>,
 
+    /// Real-filesystem practice playground (~/ArcAcademy/playground),
+    /// used when lessons.practice_mode = "real"
+    pub playground: Option<arct_core::Playground>,
+
     /// Lesson menu for selecting lessons
     pub lesson_menu: Option<crate::panels::lesson_menu::LessonMenuPanel>,
 
@@ -148,25 +152,74 @@ pub struct App {
     /// Challenges panel
     pub challenges_panel: Option<crate::panels::challenges::ChallengesPanel>,
 
-    /// Pending achievements to show notifications for
-    pub pending_achievements: Vec<arct_core::Achievement>,
+    /// Pending notifications (achievement unlocks, challenge completions...)
+    pub pending_notifications: Vec<crate::panels::notification::NotificationPanel>,
 
-    /// Currently showing achievement notification
+    /// Currently showing notification popup
     pub showing_notification: Option<crate::panels::notification::NotificationPanel>,
+
+    /// Lesson library (built-ins merged with user lesson packs)
+    pub lesson_library: arct_core::LessonLibrary,
+
+    /// Per-lesson step-level resume state (persisted)
+    pub lesson_progress: HashMap<String, crate::persistence::LessonResumeState>,
+
+    /// Command palette overlay (Ctrl+K)
+    pub command_palette: Option<crate::panels::command_palette::CommandPalette>,
+
+    /// Panels visited this session (for the "visit_all_panels" achievement)
+    visited_panels: std::collections::HashSet<&'static str>,
+
+    /// Local-only telemetry sink (None when telemetry is disabled)
+    telemetry: Option<arct_telemetry::Telemetry>,
+
+    /// When the app started (for the SessionEnded telemetry event)
+    app_started: std::time::Instant,
+
+    /// Last time the session-time heartbeat folded elapsed time into stats
+    last_time_update: std::time::Instant,
+
+    /// Welcome dashboard is showing (dismissed on first keypress/click)
+    pub show_dashboard: bool,
+
+    /// Ticks since the current notification appeared (drives the brief
+    /// celebratory border animation)
+    pub notification_ticks: u32,
+
+    /// Panel geometry captured by the last render (mouse hit-testing)
+    pub panel_rects: crate::ui::PanelRects,
 }
+
+/// Panels that count towards the "visit_all_panels" achievement
+const ALL_VISITABLE_PANELS: [&str; 6] = [
+    "achievements",
+    "progress",
+    "challenges",
+    "settings",
+    "lesson_menu",
+    "help",
+];
 
 impl App {
     /// Create a new application
     pub fn new() -> Result<Self> {
+        Self::new_with_options(crate::RunOptions::default())
+    }
+
+    /// Create a new application with CLI overrides (config path, theme)
+    pub fn new_with_options(options: crate::RunOptions) -> Result<Self> {
         let session = Session::new();
         let working_dir = session.state.working_directory.clone();
         let context = ContextDetector::detect(&working_dir)?;
 
-        // Load configuration
-        let config = arct_config::Config::load().unwrap_or_else(|e| {
-            tracing::warn!("Failed to load config, using defaults: {}", e);
-            arct_config::Config::default()
-        });
+        // Load configuration (an explicit --config path is an error if unusable)
+        let config = match &options.config_path {
+            Some(path) => arct_config::Config::load_from(path)?,
+            None => arct_config::Config::load().unwrap_or_else(|e| {
+                tracing::warn!("Failed to load config, using defaults: {}", e);
+                arct_config::Config::default()
+            }),
+        };
 
         // Load session data (history, stats, progress) from disk
         let session_data = match crate::persistence::load_session() {
@@ -189,8 +242,11 @@ impl App {
         let aliases = config.shell.aliases.clone();
         let environment_vars = config.shell.environment.clone();
 
-        // Select theme based on config
-        let theme = Theme::from_name(&config.theme.default_theme);
+        // Select theme: CLI --theme override takes precedence over config
+        let theme = match &options.theme {
+            Some(name) => crate::resolve_theme(name)?,
+            None => Theme::from_name(&config.theme.default_theme),
+        };
 
         // Initialize AI provider if enabled
         let ai_provider = if config.ai.enabled {
@@ -215,6 +271,9 @@ impl App {
             None
         };
 
+        // Returning users see the welcome dashboard until their first key
+        let show_dashboard = onboarding.is_none();
+
         // Create welcome message for returning users
         let welcome_message = if config.general.setup_complete {
             let name = config.general.user_name.as_deref().unwrap_or("there");
@@ -237,6 +296,9 @@ impl App {
         // Load user stats from session and update streak
         let mut user_stats = session_data.user_stats;
         user_stats.update_streak(); // Update streak on app start
+        // session_start is #[serde(skip)] and deserializes to the epoch;
+        // reset it so the first update_session_time() doesn't count decades
+        user_stats.session_start = chrono::Utc::now();
 
         // Load challenge manager from session
         let mut challenge_manager = session_data.challenge_manager;
@@ -246,6 +308,39 @@ impl App {
 
         // Load completed lessons from session
         let completed_lessons = session_data.completed_lessons;
+
+        // Build the lesson library: built-ins merged with user lesson packs
+        // from ~/.config/arct/lessons/*.toml
+        let mut lesson_library = arct_core::LessonLibrary::new();
+        if let Some(config_dir) = dirs::config_dir() {
+            let user_lessons_dir = config_dir.join("arct").join("lessons");
+            match lesson_library.load_from_dir(&user_lessons_dir) {
+                Ok(0) => {}
+                Ok(count) => tracing::info!(
+                    "Loaded {} user lesson(s) from {}",
+                    count,
+                    user_lessons_dir.display()
+                ),
+                Err(e) => tracing::warn!(
+                    "Failed to load user lessons from {}: {}",
+                    user_lessons_dir.display(),
+                    e
+                ),
+            }
+        }
+
+        // Local-only telemetry, strictly opt-in (config default is OFF)
+        let telemetry = if config.telemetry.enabled {
+            match arct_telemetry::Telemetry::new(true) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::warn!("Failed to initialize telemetry: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         Ok(Self {
             should_quit: false,
@@ -282,16 +377,31 @@ impl App {
             lesson_panel: Self::initialize_lesson_panel(),
             lesson_mode: false,
             virtual_fs: None,
+            playground: None,
             lesson_menu: None,
             completed_lessons,
             user_stats,
             challenge_manager,
-            recommendation_engine: arct_core::RecommendationEngine::new(),
+            recommendation_engine: arct_core::RecommendationEngine::with_library(
+                lesson_library.clone(),
+            ),
             achievements_panel: None,
             progress_panel: None,
             challenges_panel: None,
-            pending_achievements: Vec::new(),
+            pending_notifications: Vec::new(),
             showing_notification: None,
+            lesson_library,
+            lesson_progress: session_data.lesson_progress,
+            command_palette: None,
+            visited_panels: std::collections::HashSet::new(),
+            telemetry,
+            app_started: std::time::Instant::now(),
+            last_time_update: std::time::Instant::now(),
+            // Returning users land on the welcome dashboard (streak first!);
+            // first-run users go through onboarding instead
+            show_dashboard,
+            notification_ticks: 0,
+            panel_rects: crate::ui::PanelRects::default(),
         })
     }
 
@@ -429,25 +539,62 @@ impl App {
         // Show splash screen
         Self::show_splash_screen()?;
 
-        // Setup terminal
+        // Panic safety: restore the terminal (raw mode, alternate screen,
+        // mouse capture) before the default panic handler prints, so a crash
+        // never leaves the user's terminal in a broken state
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = disable_raw_mode();
+            let _ = execute!(
+                io::stdout(),
+                crossterm::event::DisableMouseCapture,
+                LeaveAlternateScreen
+            );
+            default_hook(info);
+        }));
+
+        // Setup terminal (mouse capture: click to focus, wheel to scroll)
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            crossterm::event::EnableMouseCapture
+        )?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
         // Start event handler
         self.event_handler.start().await;
 
+        // Telemetry: session start (local-only, opt-in)
+        self.telemetry_record(arct_telemetry::TelemetryEvent::SessionStarted {
+            session_id: self.session_id.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+        });
+
         // Main loop
         let result = self.main_loop(&mut terminal).await;
 
-        // Save all progress before exiting
+        // Fold the remaining session time into "Time Invested", then save
+        self.user_stats.update_session_time();
         self.save_session();
 
-        // Restore terminal
+        // Telemetry: session end
+        self.telemetry_record(arct_telemetry::TelemetryEvent::SessionEnded {
+            session_id: self.session_id.clone(),
+            duration_ms: self.app_started.elapsed().as_millis() as u64,
+        });
+
+        // Restore terminal (mouse capture must be disabled on exit)
         disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(
+            terminal.backend_mut(),
+            crossterm::event::DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
         terminal.show_cursor()?;
 
         result
@@ -459,9 +606,14 @@ impl App {
             // Draw UI
             terminal.draw(|f| ui::draw(f, self))?;
 
-            // Handle events
-            if let Some(event) = self.event_handler.next().await {
-                self.handle_event(event).await?;
+            // Handle events; a closed channel means the event source is gone,
+            // so exit instead of spinning
+            match self.event_handler.next().await {
+                Some(event) => self.handle_event(event).await?,
+                None => {
+                    tracing::warn!("Event channel closed, exiting main loop");
+                    break;
+                }
             }
 
             // Check for quit
@@ -477,6 +629,10 @@ impl App {
     async fn handle_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Key(key) => {
+                // The welcome dashboard dismisses on the first keypress;
+                // the key still does whatever it normally does
+                self.show_dashboard = false;
+
                 // If onboarding is active, handle onboarding events
                 if self.onboarding.is_some() {
                     return self.handle_onboarding_event(key).await;
@@ -485,6 +641,41 @@ impl App {
                 // If settings panel is open, handle settings events
                 if self.settings_panel.is_some() {
                     return self.handle_settings_event(key).await;
+                }
+
+                // If the command palette is open, it consumes all keys
+                if let Some(ref mut palette) = self.command_palette {
+                    use crate::panels::command_palette::PaletteOutcome;
+                    match palette.handle_key(key) {
+                        PaletteOutcome::Pending => {}
+                        PaletteOutcome::Close => {
+                            self.command_palette = None;
+                        }
+                        PaletteOutcome::Execute(command) => {
+                            self.command_palette = None;
+                            self.execute_palette_command(command).await?;
+                        }
+                    }
+                    return Ok(());
+                }
+
+                // If the achievements panel is open, ↑/↓ (or j/k) scroll it
+                if let Some(ref mut panel) = self.achievements_panel {
+                    match key.code {
+                        KeyCode::Up | KeyCode::Char('k')
+                            if key.modifiers == KeyModifiers::NONE =>
+                        {
+                            panel.scroll_up();
+                            return Ok(());
+                        }
+                        KeyCode::Down | KeyCode::Char('j')
+                            if key.modifiers == KeyModifiers::NONE =>
+                        {
+                            panel.scroll_down();
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
                 }
 
                 // If lesson menu is open, handle menu events
@@ -507,14 +698,7 @@ impl App {
                             return Ok(());
                         }
                         KeyCode::Enter => {
-                            // Load selected lesson
-                            if let Some(lesson) = menu.get_selected_lesson() {
-                                if let Some(ref mut panel) = self.lesson_panel {
-                                    panel.load_lesson(lesson);
-                                    self.lesson_menu = None;
-                                    self.last_output = format!("{}Lesson loaded! Follow the instructions in the lesson panel.\n", icons::lesson().content);
-                                }
-                            }
+                            self.activate_selected_lesson();
                             return Ok(());
                         }
                         KeyCode::Esc | KeyCode::Char('q') => {
@@ -594,11 +778,26 @@ impl App {
                 let action = key_to_action(key);
                 self.handle_action(action).await?;
             }
+            Event::Mouse(mouse) => {
+                self.handle_mouse(mouse).await?;
+            }
             Event::Resize(_, _) => {
                 // Terminal will automatically redraw on next iteration
             }
             Event::Tick => {
-                // Update any time-based state here
+                // Drive the notification popup's brief border animation
+                if self.showing_notification.is_some() {
+                    self.notification_ticks = self.notification_ticks.saturating_add(1);
+                }
+
+                // Session-time heartbeat: fold elapsed time into stats every
+                // ~30s so the Progress panel's "Time Invested" accumulates
+                // even if the app exits uncleanly
+                if self.last_time_update.elapsed() >= std::time::Duration::from_secs(30) {
+                    self.user_stats.update_session_time();
+                    self.last_time_update = std::time::Instant::now();
+                    self.save_session();
+                }
             }
             Event::Quit => {
                 self.should_quit = true;
@@ -606,6 +805,161 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Handle a mouse event: click to focus panels / select rows, wheel to
+    /// scroll. Purely additive — every mouse action has a keyboard twin.
+    async fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let (col, row) = (mouse.column, mouse.row);
+
+                // A click also dismisses transient surfaces, like a keypress
+                if self.showing_notification.is_some() {
+                    self.dismiss_notification();
+                    return Ok(());
+                }
+
+                // Command palette: click selects, click-on-selected runs
+                if let Some(ref mut palette) = self.command_palette {
+                    use crate::panels::command_palette::PaletteOutcome;
+                    if let PaletteOutcome::Execute(command) = palette.click_at(col, row) {
+                        self.command_palette = None;
+                        self.execute_palette_command(command).await?;
+                    }
+                    return Ok(());
+                }
+
+                // Lesson menu: click selects, click-on-selected starts
+                if self.lesson_menu.is_some() {
+                    let activate = self
+                        .lesson_menu
+                        .as_mut()
+                        .map(|menu| menu.click_at(col, row))
+                        .unwrap_or(false);
+                    if activate {
+                        self.activate_selected_lesson();
+                    }
+                    return Ok(());
+                }
+
+                // Other overlays capture the click (Esc closes them)
+                if self.onboarding.is_some()
+                    || self.show_help
+                    || self.settings_panel.is_some()
+                    || self.achievements_panel.is_some()
+                    || self.progress_panel.is_some()
+                    || self.challenges_panel.is_some()
+                {
+                    return Ok(());
+                }
+
+                // Plain click: dismiss the dashboard and focus the panel hit
+                self.show_dashboard = false;
+                if let Some(panel) = self.panel_rects.panel_at(col, row) {
+                    self.active_panel = panel;
+                    if panel == PanelId::Context {
+                        self.record_feature_event("use_context");
+                    }
+                }
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let down = matches!(mouse.kind, MouseEventKind::ScrollDown);
+
+                if let Some(ref mut palette) = self.command_palette {
+                    palette.scroll_selection(down);
+                } else if let Some(ref mut menu) = self.lesson_menu {
+                    if down {
+                        menu.select_next();
+                    } else {
+                        menu.select_previous();
+                    }
+                } else if let Some(ref mut panel) = self.achievements_panel {
+                    if down {
+                        panel.scroll_down();
+                    } else {
+                        panel.scroll_up();
+                    }
+                } else if down {
+                    // Wheel over the main view scrolls the output panel
+                    let total_lines = self.last_output.lines().count();
+                    if self.output_scroll < total_lines.saturating_sub(1) {
+                        self.output_scroll += 1;
+                    }
+                } else {
+                    self.output_scroll = self.output_scroll.saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Start (or resume) the lesson currently selected in the lesson menu.
+    /// Locked lessons don't start — the menu shows what unlocks them instead.
+    fn activate_selected_lesson(&mut self) {
+        let Some(lesson) = self
+            .lesson_menu
+            .as_ref()
+            .and_then(|menu| menu.get_selected_lesson())
+        else {
+            return;
+        };
+
+        // Locked lessons are selectable but not startable
+        use crate::panels::lesson_menu::{lesson_state, LessonState};
+        if lesson_state(&lesson, &self.completed_lessons) == LessonState::Locked {
+            let missing = self
+                .lesson_menu
+                .as_ref()
+                .map(|menu| {
+                    menu.missing_prerequisite_titles(&lesson, &self.completed_lessons)
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            if let Some(ref mut menu) = self.lesson_menu {
+                menu.set_status(format!("🔒 Locked — complete {} first", missing));
+            }
+            return;
+        }
+
+        // Load selected lesson (resuming at a saved step if it was left mid-way)
+        let lesson_id = lesson.id.clone();
+        let resume_state = self.lesson_progress.get(&lesson_id).cloned();
+
+        let mut loaded = false;
+        if let Some(ref mut panel) = self.lesson_panel {
+            panel.load_lesson(lesson);
+            self.lesson_menu = None;
+            loaded = true;
+
+            match resume_state {
+                Some(state) if state.current_step_index > 0 => {
+                    let resumed_at =
+                        panel.resume_at(state.current_step_index, state.completed_steps);
+                    self.last_output = format!(
+                        "{}Lesson loaded — resumed at step {}.\n\nUse Alt+R to restart from the beginning, Alt+Left to go back a step.\n",
+                        icons::lesson().content,
+                        resumed_at + 1
+                    );
+                }
+                _ => {
+                    self.last_output = format!(
+                        "{}Lesson loaded! Follow the instructions in the lesson panel.\n",
+                        icons::lesson().content
+                    );
+                }
+            }
+        }
+
+        if loaded {
+            // Materialize starter files: real playground dir (real mode)
+            // or seeded sandbox (simulated)
+            self.prepare_lesson_environment();
+        }
     }
 
     /// Handle an action
@@ -621,10 +975,16 @@ impl App {
             Action::NextPanel => {
                 self.active_panel = self.active_panel.next();
                 // Don't reset scroll - users may want to keep reading output
+                if self.active_panel == PanelId::Context {
+                    self.record_feature_event("use_context");
+                }
             }
             Action::PreviousPanel => {
                 self.active_panel = self.active_panel.previous();
                 // Don't reset scroll - users may want to keep reading output
+                if self.active_panel == PanelId::Context {
+                    self.record_feature_event("use_context");
+                }
             }
             Action::ScrollUp => {
                 // Only scroll when Output panel is focused
@@ -667,9 +1027,16 @@ impl App {
             }
             Action::Help => {
                 self.show_help = !self.show_help;
+                if self.show_help {
+                    self.mark_panel_visited("help");
+                }
             }
             Action::ToggleTheme => {
+                let from = self.theme.name.clone();
                 self.theme = self.theme.cycle_next();
+                let to = self.theme.name.clone();
+                self.record_feature_event("change_theme");
+                self.telemetry_record(arct_telemetry::TelemetryEvent::ThemeChanged { from, to });
             }
             Action::ToggleAI => {
                 self.toggle_ai_mode();
@@ -679,6 +1046,7 @@ impl App {
                     self.settings_panel = None;
                 } else {
                     self.settings_panel = Some(crate::panels::settings::SettingsPanel::new());
+                    self.mark_panel_visited("settings");
                 }
             }
             Action::ToggleLesson => {
@@ -690,8 +1058,41 @@ impl App {
                     if self.lesson_menu.is_some() {
                         self.lesson_menu = None;
                     } else {
-                        self.lesson_menu = Some(crate::panels::lesson_menu::LessonMenuPanel::new());
+                        self.lesson_menu = Some(
+                            crate::panels::lesson_menu::LessonMenuPanel::with_library(
+                                self.lesson_library.clone(),
+                            ),
+                        );
+                        self.mark_panel_visited("lesson_menu");
                     }
+                } else {
+                    // Outside lesson mode, 'm' enters lesson mode, which
+                    // opens the lesson map automatically
+                    self.toggle_lesson_mode();
+                }
+            }
+            Action::LessonPreviousStep => {
+                self.lesson_previous_step();
+            }
+            Action::LessonRestart => {
+                self.lesson_restart();
+            }
+            Action::TogglePracticeMode => {
+                self.toggle_practice_mode();
+            }
+            Action::ResetPlayground => {
+                self.reset_playground();
+            }
+            Action::CommandPalette => {
+                if self.command_palette.is_some() {
+                    self.command_palette = None;
+                } else {
+                    self.command_palette =
+                        Some(crate::panels::command_palette::CommandPalette::new());
+                    self.telemetry_record(arct_telemetry::TelemetryEvent::FeatureUsed {
+                        feature: "command_palette".to_string(),
+                        context: None,
+                    });
                 }
             }
             Action::Escape => {
@@ -896,9 +1297,231 @@ impl App {
                 }
             }
 
+            "grep" => {
+                let case_insensitive = Self::has_flag(cmd, "-i") || Self::has_flag(cmd, "--ignore-case");
+                let line_numbers = Self::has_flag(cmd, "-n") || Self::has_flag(cmd, "--line-number");
+
+                let positional: Vec<&String> = cmd.args.iter().filter(|a| !a.starts_with('-')).collect();
+                let Some(pattern) = positional.first() else {
+                    return Some(format!("{}grep: usage: grep [-i] [-n] PATTERN FILE...\n", icons::error().content));
+                };
+                let files = &positional[1..];
+                if files.is_empty() {
+                    return Some(format!("{}(lesson sandbox) grep needs a file here — try: grep {} <file>\n", icons::hint().content, pattern));
+                }
+
+                let mut output = String::new();
+                let multiple = files.len() > 1;
+                for file in files {
+                    match vfs.grep_file(pattern, file, case_insensitive) {
+                        Ok(matches) => {
+                            for (line_no, line) in matches {
+                                if multiple {
+                                    output.push_str(&format!("{}:", file));
+                                }
+                                if line_numbers {
+                                    output.push_str(&format!("{}:", line_no));
+                                }
+                                output.push_str(&line);
+                                output.push('\n');
+                            }
+                        }
+                        Err(e) => output.push_str(&format!("{}grep: {}\n", icons::error().content, e)),
+                    }
+                }
+                if output.is_empty() {
+                    output = format!("(no lines matched '{}')\n", pattern);
+                }
+                Some(output)
+            }
+
+            "head" | "tail" => {
+                let (count, files) = Self::parse_line_count_args(&cmd.args);
+                if files.is_empty() {
+                    return Some(format!("{}(lesson sandbox) {} needs a file here — try: {} -n {} <file>\n", icons::hint().content, program, program, count));
+                }
+
+                let mut output = String::new();
+                let multiple = files.len() > 1;
+                for file in &files {
+                    let result = if program == "head" {
+                        vfs.head_file(file, count)
+                    } else {
+                        vfs.tail_file(file, count)
+                    };
+                    match result {
+                        Ok(content) => {
+                            if multiple {
+                                output.push_str(&format!("==> {} <==\n", file));
+                            }
+                            output.push_str(&content);
+                        }
+                        Err(e) => output.push_str(&format!("{}{}: {}\n", icons::error().content, program, e)),
+                    }
+                }
+                Some(output)
+            }
+
+            "wc" => {
+                let want_lines = Self::has_flag(cmd, "-l") || Self::has_flag(cmd, "--lines");
+                let want_words = Self::has_flag(cmd, "-w") || Self::has_flag(cmd, "--words");
+                let want_bytes = Self::has_flag(cmd, "-c") || Self::has_flag(cmd, "--bytes");
+                let want_all = !want_lines && !want_words && !want_bytes;
+
+                let files: Vec<&String> = cmd.args.iter().filter(|a| !a.starts_with('-')).collect();
+                if files.is_empty() {
+                    return Some(format!("{}(lesson sandbox) wc needs a file here — try: wc -l <file>\n", icons::hint().content));
+                }
+
+                let mut output = String::new();
+                for file in &files {
+                    match vfs.wc_file(file) {
+                        Ok((lines, words, bytes)) => {
+                            let mut parts = Vec::new();
+                            if want_all || want_lines {
+                                parts.push(format!("{:8}", lines));
+                            }
+                            if want_all || want_words {
+                                parts.push(format!("{:8}", words));
+                            }
+                            if want_all || want_bytes {
+                                parts.push(format!("{:8}", bytes));
+                            }
+                            output.push_str(&format!("{} {}\n", parts.join(""), file));
+                        }
+                        Err(e) => output.push_str(&format!("{}wc: {}\n", icons::error().content, e)),
+                    }
+                }
+                Some(output)
+            }
+
+            "echo" => {
+                // Handle `echo text`, `echo text > file`, `echo text >> file`
+                let mut no_newline = false;
+                let mut redirect: Option<(String, bool)> = None; // (target, append)
+                let mut text_parts: Vec<&str> = Vec::new();
+
+                let mut iter = cmd.args.iter().peekable();
+                while let Some(arg) = iter.next() {
+                    if text_parts.is_empty() && redirect.is_none() && arg == "-n" {
+                        no_newline = true;
+                    } else if arg == ">>" || arg == ">" {
+                        let append = arg == ">>";
+                        match iter.next() {
+                            Some(target) => redirect = Some((target.clone(), append)),
+                            None => {
+                                return Some(format!("{}echo: syntax error: expected a filename after '{}'\n", icons::error().content, arg));
+                            }
+                        }
+                        break;
+                    } else if let Some(target) = arg.strip_prefix(">>") {
+                        redirect = Some((target.to_string(), true));
+                        break;
+                    } else if let Some(target) = arg.strip_prefix('>') {
+                        redirect = Some((target.to_string(), false));
+                        break;
+                    } else {
+                        text_parts.push(arg);
+                    }
+                }
+
+                let mut text = text_parts.join(" ");
+                if !no_newline {
+                    text.push('\n');
+                }
+
+                match redirect {
+                    Some((target, append)) => match vfs.write_file(&target, &text, append) {
+                        Ok(_) => Some(format!(
+                            "{}{} {}\n",
+                            icons::success().content,
+                            if append { "Appended to" } else { "Wrote" },
+                            target
+                        )),
+                        Err(e) => Some(format!("{}echo: {}\n", icons::error().content, e)),
+                    },
+                    None => Some(text),
+                }
+            }
+
+            "chmod" => {
+                let positional: Vec<&String> = cmd.args.iter().filter(|a| !a.starts_with('-') || a.chars().skip(1).all(|c| "rwxugoa+-=,0123456789".contains(c))).collect();
+                // chmod modes like "-w" also start with '-'; treat the first
+                // positional as the mode and the rest as files
+                let Some(mode) = positional.first() else {
+                    return Some(format!("{}chmod: missing operand\n  Usage: chmod MODE FILE...\n", icons::error().content));
+                };
+                let files = &positional[1..];
+                if files.is_empty() {
+                    return Some(format!("{}chmod: missing file operand after '{}'\n", icons::error().content, mode));
+                }
+
+                let mut output = String::new();
+                for file in files {
+                    match vfs.resolve_path(file) {
+                        Ok(real) if real.exists() => {
+                            output.push_str(&format!(
+                                "{}Mode of '{}' set to '{}' (simulated — permissions aren't enforced in the lesson sandbox)\n",
+                                icons::success().content, file, mode
+                            ));
+                        }
+                        Ok(_) => output.push_str(&format!("{}chmod: cannot access '{}': No such file or directory\n", icons::error().content, file)),
+                        Err(e) => output.push_str(&format!("{}chmod: {}\n", icons::error().content, e)),
+                    }
+                }
+                Some(output)
+            }
+
+            // Common commands lessons mention but that can't be meaningfully
+            // simulated against a sandbox filesystem: return an instructional
+            // message instead of silent nothing (the lesson step still
+            // validates the command syntax)
+            "ps" | "top" | "htop" | "kill" | "killall" | "git" | "apt" | "apt-get" | "yum"
+            | "dnf" | "brew" | "ping" | "curl" | "wget" | "ssh" | "scp" | "sudo" | "man"
+            | "df" | "du" | "free" | "uname" | "whoami" | "tar" | "zip" | "unzip" | "gzip"
+            | "nano" | "vim" | "vi" | "less" | "more" | "netstat" | "ifconfig" | "ip" | "ss"
+            | "lsof" | "systemctl" | "journalctl" | "env" | "printenv" | "find" | "sed"
+            | "awk" | "sort" | "uniq" | "ln" | "which" | "python" | "python3" | "pip"
+            | "npm" | "node" => {
+                Some(format!(
+                    "(lesson sandbox) '{}' isn't simulated here — this step checks your command syntax.\n",
+                    program
+                ))
+            }
+
             // Commands that don't manipulate the filesystem
             _ => None,
         }
+    }
+
+    /// Parse `head`/`tail` style arguments: `-n N`, `-nN`, `-N`, plus file
+    /// operands. Returns (line count, files); the count defaults to 10.
+    fn parse_line_count_args(args: &[String]) -> (usize, Vec<String>) {
+        let mut count = 10usize;
+        let mut files = Vec::new();
+
+        let mut iter = args.iter().peekable();
+        while let Some(arg) = iter.next() {
+            if arg == "-n" || arg == "--lines" {
+                if let Some(n) = iter.peek().and_then(|v| v.parse::<usize>().ok()) {
+                    count = n;
+                    iter.next();
+                }
+            } else if let Some(n) = arg
+                .strip_prefix("-n")
+                .or_else(|| arg.strip_prefix("--lines="))
+                .and_then(|v| v.parse::<usize>().ok())
+            {
+                count = n;
+            } else if let Some(n) = arg.strip_prefix('-').and_then(|v| v.parse::<usize>().ok()) {
+                // Classic `head -5` form
+                count = n;
+            } else if !arg.starts_with('-') {
+                files.push(arg.clone());
+            }
+        }
+
+        (count, files)
     }
 
     /// Execute the current command
@@ -913,7 +1536,9 @@ impl App {
         // If in lesson mode with empty command, skip parsing and go to validation
         if self.lesson_mode && command_str.is_empty() {
             // Extract lesson completion info outside the borrow scope
-            let mut lesson_completed_info: Option<(String, arct_core::Difficulty)> = None;
+            let mut lesson_completed_info: Option<(String, arct_core::Difficulty, u32, u64, usize)> =
+                None;
+            let mut step_advanced = false;
 
             if let Some(ref mut lesson_panel) = self.lesson_panel {
                 let validation = lesson_panel.validate_current_step(&command_str);
@@ -931,9 +1556,17 @@ impl App {
                     if !lesson_panel.next_step() {
                         // Lesson complete! Extract info for later processing
                         if let Some(lesson) = lesson_panel.current_lesson.as_ref() {
-                            lesson_completed_info = Some((lesson.id.clone(), lesson.difficulty));
+                            lesson_completed_info = Some((
+                                lesson.id.clone(),
+                                lesson.difficulty,
+                                lesson.estimated_minutes,
+                                lesson_panel.elapsed_seconds(),
+                                lesson_panel.wrong_answers(),
+                            ));
                         }
                         self.last_output.push_str(&format!("\n{}Congratulations! You've completed this lesson!\n\nPress Ctrl+L to exit lesson mode or 'm' to select another lesson.\n", icons::celebration().content));
+                    } else {
+                        step_advanced = true;
                     }
                 } else {
                     // Information steps should always succeed with Enter
@@ -944,9 +1577,15 @@ impl App {
                 self.add_to_history(command_str.clone());
             }
 
+            // Persist step-level position for resume
+            if step_advanced {
+                self.save_lesson_progress();
+            }
+
             // Process lesson completion outside the borrow scope
-            if let Some((lesson_id, difficulty)) = lesson_completed_info {
-                self.record_lesson_completion(lesson_id, difficulty);
+            if let Some((lesson_id, difficulty, estimated, elapsed, wrong)) = lesson_completed_info
+            {
+                self.record_lesson_completion(lesson_id, difficulty, estimated, elapsed, wrong);
             }
 
             return Ok(());
@@ -955,13 +1594,21 @@ impl App {
         // Parse command
         let cmd = self.analyzer.parse(&command_str)?;
 
-        // If in lesson mode, execute against virtual FS and validate
+        // If in lesson mode, execute (real playground or virtual FS) and validate
         if self.lesson_mode {
-            // Execute command against virtual filesystem and get output
-            let vfs_output = self.execute_virtual_fs_command(&cmd);
+            // Execute the command in the active practice environment:
+            // real shell inside ~/ArcAcademy/playground (guard-checked) when
+            // practice_mode = "real", simulated virtual filesystem otherwise
+            let vfs_output = if self.practice_mode_is_real() {
+                Some(self.execute_playground_command(&cmd, &command_str).await)
+            } else {
+                self.execute_virtual_fs_command(&cmd)
+            };
 
             // Extract lesson completion info outside the borrow scope
-            let mut lesson_completed_info: Option<(String, arct_core::Difficulty)> = None;
+            let mut lesson_completed_info: Option<(String, arct_core::Difficulty, u32, u64, usize)> =
+                None;
+            let mut step_advanced = false;
 
             if let Some(ref mut lesson_panel) = self.lesson_panel {
                 let validation = lesson_panel.validate_current_step(&command_str);
@@ -989,10 +1636,17 @@ impl App {
                     if !lesson_panel.next_step() {
                         // Lesson complete! Extract info for later processing
                         if let Some(lesson) = lesson_panel.current_lesson.as_ref() {
-                            lesson_completed_info = Some((lesson.id.clone(), lesson.difficulty));
+                            lesson_completed_info = Some((
+                                lesson.id.clone(),
+                                lesson.difficulty,
+                                lesson.estimated_minutes,
+                                lesson_panel.elapsed_seconds(),
+                                lesson_panel.wrong_answers(),
+                            ));
                         }
                         output.push_str(&format!("{}Congratulations! You've completed this lesson!\n\nPress Ctrl+L to exit lesson mode or 'm' to select another lesson.\n", icons::celebration().content));
                     } else {
+                        step_advanced = true;
                         output.push_str("Moving to next step...\n");
                     }
                 } else {
@@ -1018,9 +1672,32 @@ impl App {
                 self.add_to_history(command_str.clone());
             }
 
+            // Persist step-level position for resume
+            if step_advanced {
+                self.save_lesson_progress();
+            }
+
+            // Lesson-mode commands count towards challenges too
+            self.check_challenges_for_command(&command_str);
+
+            // Telemetry: command name only (no arguments — privacy)
+            let command_name = command_str
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_string();
+            if !command_name.is_empty() {
+                self.telemetry_record(arct_telemetry::TelemetryEvent::CommandExecuted {
+                    command: command_name,
+                    success: true,
+                    duration_ms: 0,
+                });
+            }
+
             // Process lesson completion outside the borrow scope
-            if let Some((lesson_id, difficulty)) = lesson_completed_info {
-                self.record_lesson_completion(lesson_id, difficulty);
+            if let Some((lesson_id, difficulty, estimated, elapsed, wrong)) = lesson_completed_info
+            {
+                self.record_lesson_completion(lesson_id, difficulty, estimated, elapsed, wrong);
             }
 
             return Ok(());
@@ -1080,18 +1757,21 @@ impl App {
         // Execute the command for real with timeout
         let start_time = std::time::Instant::now();
 
-        // Use tokio timeout to prevent hanging
-        let timeout_duration = std::time::Duration::from_secs(5);
+        // The executor enforces the timeout itself and kills the child
+        // process if it fires (configurable via general.command_timeout)
+        let timeout_duration = std::time::Duration::from_secs(self.config.general.command_timeout);
         let env_vars = self.environment_vars.clone();
-        let output_result = tokio::time::timeout(
-            timeout_duration,
-            self.shell_executor.execute(command_str.clone(), env_vars)
-        ).await;
+        let output_result = self
+            .shell_executor
+            .execute(command_str.clone(), env_vars, timeout_duration, None)
+            .await;
 
         let output = match output_result {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => format!("{}Error: {}", icons::error().content, e),
-            Err(_) => format!("Command timed out after {} seconds", timeout_duration.as_secs()),
+            Ok(output) => output,
+            Err(e) => match e.downcast_ref::<crate::shell::CommandTimeout>() {
+                Some(timeout) => timeout.to_string(),
+                None => format!("{}Error: {}", icons::error().content, e),
+            },
         };
 
         let duration = start_time.elapsed();
@@ -1128,7 +1808,27 @@ impl App {
 
         // Track command use for stats and achievements
         self.record_command_for_stats(&command_str);
+
+        // Check daily/weekly challenges after successful commands
+        if success {
+            self.check_challenges_for_command(&command_str);
+        }
+
         self.check_and_unlock_achievements();
+
+        // Telemetry: command name only (no arguments — privacy)
+        let command_name = command_str
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        if !command_name.is_empty() {
+            self.telemetry_record(arct_telemetry::TelemetryEvent::CommandExecuted {
+                command: command_name,
+                success,
+                duration_ms: duration.as_millis() as u64,
+            });
+        }
 
         // Clear buffer
         self.command_buffer.clear();
@@ -1317,6 +2017,7 @@ impl App {
             user_stats: self.user_stats.clone(),
             completed_lessons: self.completed_lessons.clone(),
             challenge_manager: self.challenge_manager.clone(),
+            lesson_progress: self.lesson_progress.clone(),
         };
 
         if let Err(e) = crate::persistence::save_session(&session_data) {
@@ -1523,6 +2224,7 @@ impl App {
                 // Clear AI input when entering AI mode
                 self.ai_input_buffer.clear();
                 self.ai_loading = false;
+                self.record_feature_event("use_ai");
             }
         } else {
             self.last_output = format!("{}AI is not enabled. Configure it in ~/.config/arct/config.toml\n", icons::error().content);
@@ -1534,16 +2236,42 @@ impl App {
         self.lesson_mode = !self.lesson_mode;
 
         if self.lesson_mode {
-            // Initialize virtual filesystem
-            match arct_core::VirtualFileSystem::new("nav-basics", &self.session_id) {
-                Ok(vfs) => {
-                    self.virtual_fs = Some(vfs);
-                    self.last_output = format!("{}Lesson mode activated! You're now in a safe virtual filesystem.\n\nPress Ctrl+L again to return to normal mode.\n\nNavigate through lessons using the Learning panel on the right.\n", icons::lesson().content);
+            if self.practice_mode_is_real() {
+                // Real-filesystem practice: open the playground
+                match self.ensure_playground() {
+                    Ok(()) => {
+                        let mut msg = format!(
+                            "{}Lesson mode activated in REAL practice mode.\n\nCommands run for real inside ~/ArcAcademy/playground.\n\nPress Ctrl+L again to return to normal mode.\n",
+                            icons::lesson().content
+                        );
+                        if let Some(intro) = self.real_mode_intro_if_needed() {
+                            msg.push('\n');
+                            msg.push_str(&intro);
+                        }
+                        self.last_output = msg;
+                    }
+                    Err(e) => {
+                        self.last_output = format!(
+                            "{}Failed to open the practice playground: {}\n",
+                            icons::error().content,
+                            e
+                        );
+                        self.lesson_mode = false;
+                        return;
+                    }
                 }
-                Err(e) => {
-                    self.last_output = format!("{}Failed to initialize lesson environment: {}\n", icons::error().content, e);
-                    self.lesson_mode = false;
-                    return;
+            } else {
+                // Simulated practice: initialize the virtual filesystem
+                match arct_core::VirtualFileSystem::new("nav-basics", &self.session_id) {
+                    Ok(vfs) => {
+                        self.virtual_fs = Some(vfs);
+                        self.last_output = format!("{}Lesson mode activated! You're now in a safe virtual filesystem.\n\nPress Ctrl+L again to return to normal mode.\n\nNavigate through lessons using the Learning panel on the right.\n", icons::lesson().content);
+                    }
+                    Err(e) => {
+                        self.last_output = format!("{}Failed to initialize lesson environment: {}\n", icons::error().content, e);
+                        self.lesson_mode = false;
+                        return;
+                    }
                 }
             }
 
@@ -1554,12 +2282,278 @@ impl App {
 
             // Show lesson menu to let user choose a lesson
             if self.lesson_menu.is_none() {
-                self.lesson_menu = Some(crate::panels::lesson_menu::LessonMenuPanel::new());
+                self.lesson_menu = Some(crate::panels::lesson_menu::LessonMenuPanel::with_library(
+                    self.lesson_library.clone(),
+                ));
+                self.mark_panel_visited("lesson_menu");
             }
         } else {
-            // Clean up virtual filesystem
+            // Clean up virtual filesystem (playground dirs are real files the
+            // learner owns — they persist until an explicit reset)
             self.virtual_fs = None;
             self.last_output = format!("{}Lesson mode deactivated. Back to normal shell mode and real filesystem.\n", icons::learning().content);
+        }
+    }
+
+    /// Whether lesson practice runs on the real filesystem playground
+    fn practice_mode_is_real(&self) -> bool {
+        self.config.lessons.is_real()
+    }
+
+    /// Default playground root: ~/ArcAcademy/playground
+    fn playground_root() -> Result<std::path::PathBuf> {
+        dirs::home_dir()
+            .map(|home| home.join("ArcAcademy").join("playground"))
+            .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))
+    }
+
+    /// Open the playground on demand (idempotent)
+    fn ensure_playground(&mut self) -> Result<()> {
+        if self.playground.is_none() {
+            let root = Self::playground_root()?;
+            self.playground = Some(arct_core::Playground::open(root)?);
+        }
+        Ok(())
+    }
+
+    /// One-time explainer shown on first entry into real practice mode.
+    /// Returns the explainer text and persists the "already shown" flag.
+    fn real_mode_intro_if_needed(&mut self) -> Option<String> {
+        if self.config.lessons.real_mode_intro_shown {
+            return None;
+        }
+        self.config.lessons.real_mode_intro_shown = true;
+        if let Err(e) = self.config.save() {
+            tracing::warn!("Failed to save config: {}", e);
+        }
+        Some(format!(
+            "{}First time in REAL practice mode — here's what that means:\n\n\
+             • The playground is a real folder on your computer: ~/ArcAcademy/playground\n\
+             • Each lesson gets its own subfolder with starter files, and your session starts there\n\
+             • Commands run in the real shell — files you create, change, or delete are REAL\n\
+             • Guardrails keep commands inside the playground and block dangerous patterns\n\
+             • \"Reset Lesson Playground\" in the command palette (Ctrl+K) restores the starter files\n\n\
+             Everything outside ~/ArcAcademy/playground stays untouched. Have fun!\n",
+            icons::info().content
+        ))
+    }
+
+    /// Prepare the practice environment for the currently loaded lesson:
+    /// materialize starter files in the playground (real mode) or seed them
+    /// into a fresh virtual filesystem (simulated mode).
+    fn prepare_lesson_environment(&mut self) {
+        let lesson_info = self
+            .lesson_panel
+            .as_ref()
+            .and_then(|p| p.current_lesson.as_ref())
+            .map(|l| (l.id.clone(), l.setup.clone()));
+
+        if self.practice_mode_is_real() {
+            if let Err(e) = self.ensure_playground() {
+                self.last_output.push_str(&format!(
+                    "{}Failed to open the practice playground: {}\n",
+                    icons::error().content,
+                    e
+                ));
+                return;
+            }
+            if let Some((lesson_id, setup)) = lesson_info {
+                let result = self
+                    .playground
+                    .as_mut()
+                    .expect("playground exists after ensure_playground")
+                    .enter_lesson(&lesson_id, &setup);
+                match result {
+                    Ok(_) => {
+                        let cwd = self
+                            .playground
+                            .as_ref()
+                            .map(|p| p.display_cwd())
+                            .unwrap_or_default();
+                        self.last_output.push_str(&format!(
+                            "\n{}REAL practice mode: working in {} (starter files ready).\n",
+                            icons::folder().content,
+                            cwd
+                        ));
+                    }
+                    Err(e) => {
+                        self.last_output.push_str(&format!(
+                            "{}Failed to set up the lesson playground: {}\n",
+                            icons::error().content,
+                            e
+                        ));
+                    }
+                }
+            }
+        } else {
+            // Drop any previous sandbox BEFORE creating the new one: Drop
+            // cleans up its temp root, which may be the same path when the
+            // same lesson is re-entered in the same session
+            self.virtual_fs = None;
+
+            let lesson_id = lesson_info
+                .as_ref()
+                .map(|(id, _)| id.as_str())
+                .unwrap_or("lesson");
+            match arct_core::VirtualFileSystem::new(lesson_id, &self.session_id) {
+                Ok(vfs) => {
+                    if let Some((_, setup)) = &lesson_info {
+                        if let Err(e) = vfs.seed_setup(setup) {
+                            tracing::warn!("Failed to seed lesson setup files: {}", e);
+                        }
+                    }
+                    self.virtual_fs = Some(vfs);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initialize lesson sandbox: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Toggle lesson practice between the simulated sandbox and the real
+    /// filesystem playground ("Toggle Real-Filesystem Practice")
+    fn toggle_practice_mode(&mut self) {
+        let to_real = !self.practice_mode_is_real();
+        self.config.lessons.practice_mode = if to_real { "real" } else { "simulated" }.to_string();
+        if let Err(e) = self.config.save() {
+            tracing::warn!("Failed to save config: {}", e);
+        }
+        self.announce_practice_mode();
+        self.record_feature_event("toggle_practice_mode");
+    }
+
+    /// Announce the active practice mode (and show the one-time real-mode
+    /// explainer), then re-prepare the current lesson's environment
+    fn announce_practice_mode(&mut self) {
+        if self.practice_mode_is_real() {
+            self.last_output = format!(
+                "{}Real-filesystem practice is ON.\n\nLesson commands now run for real inside ~/ArcAcademy/playground.\n",
+                icons::warning().content
+            );
+            if let Some(intro) = self.real_mode_intro_if_needed() {
+                self.last_output.push('\n');
+                self.last_output.push_str(&intro);
+            }
+        } else {
+            self.last_output = format!(
+                "{}Real-filesystem practice is OFF.\n\nLesson commands run in the safe simulated sandbox again.\n",
+                icons::success().content
+            );
+        }
+        self.output_scroll = 0;
+
+        // Rebuild the environment for the mode we just switched into
+        if self.lesson_mode {
+            self.prepare_lesson_environment();
+        }
+    }
+
+    /// Wipe and re-materialize the current lesson's playground directory
+    /// ("Reset Lesson Playground"). Deletion is confined to
+    /// ~/ArcAcademy/playground with canonical-prefix verification.
+    fn reset_playground(&mut self) {
+        if !self.lesson_mode || !self.practice_mode_is_real() {
+            self.last_output = format!(
+                "{}Playground reset applies to lessons in real practice mode. Enable it with \"Toggle Real-Filesystem Practice\" (Ctrl+K) and start a lesson first.\n",
+                icons::hint().content
+            );
+            self.output_scroll = 0;
+            return;
+        }
+
+        // Make sure the lesson's playground is registered (e.g. after a
+        // mid-lesson mode switch), then reset it
+        if self.playground.as_ref().map(|p| p.has_lesson()) != Some(true) {
+            self.prepare_lesson_environment();
+        }
+
+        let result = self.playground.as_mut().map(|p| p.reset_lesson());
+        self.last_output = match result {
+            Some(Ok(_)) => {
+                let cwd = self
+                    .playground
+                    .as_ref()
+                    .map(|p| p.display_cwd())
+                    .unwrap_or_default();
+                format!(
+                    "{}Playground reset — starter files restored in {}.\n",
+                    icons::success().content,
+                    cwd
+                )
+            }
+            Some(Err(e)) => format!(
+                "{}Could not reset the playground: {} (load a lesson first).\n",
+                icons::warning().content,
+                e
+            ),
+            None => format!(
+                "{}The playground isn't open yet — start a lesson first.\n",
+                icons::hint().content
+            ),
+        };
+        self.output_scroll = 0;
+    }
+
+    /// Execute a lesson command against the real playground (practice_mode =
+    /// "real"): guard-check it, handle the cd builtin with persistent cwd,
+    /// and run everything else through the real shell executor.
+    async fn execute_playground_command(
+        &mut self,
+        cmd: &arct_core::Command,
+        command_str: &str,
+    ) -> String {
+        if let Err(e) = self.ensure_playground() {
+            return format!(
+                "{}The practice playground is unavailable: {}\n",
+                icons::error().content,
+                e
+            );
+        }
+
+        // Safety guard: playground containment + catastrophic-pattern denylist
+        let (verdict, cwd) = {
+            let playground = self.playground.as_ref().expect("ensured above");
+            let guard = arct_core::PlaygroundGuard::new(playground.root());
+            (
+                guard.check(command_str, playground.cwd()),
+                playground.cwd().to_path_buf(),
+            )
+        };
+        if let arct_core::GuardVerdict::Refuse { reason } = verdict {
+            return format!("{}{}\n", icons::warning().content, reason);
+        }
+
+        // cd builtin with per-session cwd persistence (simple `cd` only;
+        // compound commands run in the shell where cd affects a subshell)
+        let is_simple = !command_str.contains(['|', ';', '&', '<', '>']);
+        if cmd.program == "cd" && is_simple {
+            let target = cmd.args.first().map(String::as_str).unwrap_or("");
+            let playground = self.playground.as_mut().expect("ensured above");
+            return match playground.change_directory(target) {
+                Ok(new_path) => format!(
+                    "{}Changed directory to:\n  {}\n",
+                    icons::success().content,
+                    new_path
+                ),
+                Err(e) => format!("{}cd: {}\n", icons::error().content, e),
+            };
+        }
+
+        // Real execution, pinned to the tracked playground cwd, with the
+        // same timeout-kill behavior as the normal shell
+        let timeout = std::time::Duration::from_secs(self.config.general.command_timeout);
+        let env_vars = self.environment_vars.clone();
+        match self
+            .shell_executor
+            .execute(command_str.to_string(), env_vars, timeout, Some(cwd))
+            .await
+        {
+            Ok(output) => output,
+            Err(e) => match e.downcast_ref::<crate::shell::CommandTimeout>() {
+                Some(timeout) => timeout.to_string(),
+                None => format!("{}Error: {}", icons::error().content, e),
+            },
         }
     }
 
@@ -1839,7 +2833,10 @@ impl App {
                         SettingsAction::NextField
                     }
                     KeyCode::Enter => SettingsAction::StartEdit,
-                    KeyCode::Esc | KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                    // Esc always closes (consistent with every other overlay);
+                    // Ctrl+S toggles the panel shut too
+                    KeyCode::Esc => SettingsAction::Close,
+                    KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
                         SettingsAction::Close
                     }
                     _ => SettingsAction::None,
@@ -1862,12 +2859,24 @@ impl App {
                 }
             }
             SettingsAction::SaveEdit => {
+                let mut theme_changed = false;
+                let mut practice_mode_changed = false;
+                let practice_mode_before = self.config.lessons.practice_mode.clone();
                 if let Some(panel) = self.settings_panel.as_mut() {
                     panel.save_edit(&mut self.config)?;
+
+                    // If practice mode was changed, announce it and rebuild
+                    // the lesson environment for the new mode
+                    if selected_field == crate::panels::settings::SettingField::PracticeMode
+                        && self.config.lessons.practice_mode != practice_mode_before
+                    {
+                        practice_mode_changed = true;
+                    }
 
                     // If theme was changed, reload it
                     if selected_field == crate::panels::settings::SettingField::Theme {
                         self.theme = Theme::from_name(&self.config.theme.default_theme);
+                        theme_changed = true;
                     }
 
                     // If AI was toggled, reload provider
@@ -1888,6 +2897,13 @@ impl App {
                             self.ai_mode = false;
                         }
                     }
+                }
+
+                if theme_changed {
+                    self.record_feature_event("change_theme");
+                }
+                if practice_mode_changed {
+                    self.announce_practice_mode();
                 }
             }
             SettingsAction::CancelEdit => {
@@ -1925,6 +2941,7 @@ impl App {
             self.achievements_panel = None;
         } else {
             self.achievements_panel = Some(crate::panels::achievements::AchievementsPanel::new());
+            self.mark_panel_visited("achievements");
         }
     }
 
@@ -1934,6 +2951,7 @@ impl App {
             self.progress_panel = None;
         } else {
             self.progress_panel = Some(crate::panels::progress::ProgressPanel::new());
+            self.mark_panel_visited("progress");
         }
     }
 
@@ -1943,45 +2961,122 @@ impl App {
             self.challenges_panel = None;
         } else {
             self.challenges_panel = Some(crate::panels::challenges::ChallengesPanel::new());
+            self.mark_panel_visited("challenges");
+        }
+    }
+
+    /// Record that a panel was visited this session; fires the
+    /// "visit_all_panels" event once every visitable panel has been opened
+    fn mark_panel_visited(&mut self, panel: &'static str) {
+        if self.visited_panels.insert(panel)
+            && ALL_VISITABLE_PANELS
+                .iter()
+                .all(|p| self.visited_panels.contains(p))
+        {
+            self.record_feature_event("visit_all_panels");
+        }
+    }
+
+    /// Record a one-shot feature-usage event, surface any newly unlocked
+    /// achievements through the notification queue, and persist
+    fn record_feature_event(&mut self, key: &str) {
+        let newly_unlocked = self.user_stats.record_event(key);
+        if !newly_unlocked.is_empty() {
+            for achievement in &newly_unlocked {
+                self.queue_notification(
+                    crate::panels::notification::NotificationPanel::achievement(achievement),
+                );
+            }
+            self.save_session();
+        }
+        self.telemetry_record(arct_telemetry::TelemetryEvent::FeatureUsed {
+            feature: key.to_string(),
+            context: None,
+        });
+    }
+
+    /// Record a telemetry event if telemetry is enabled (local-only)
+    fn telemetry_record(&self, event: arct_telemetry::TelemetryEvent) {
+        if let Some(ref telemetry) = self.telemetry {
+            if let Err(e) = telemetry.record(event) {
+                tracing::warn!("Failed to record telemetry event: {}", e);
+            }
+        }
+    }
+
+    /// Check the executed command against active daily/weekly challenges.
+    /// Surfaces completed challenges AND any achievements unlocked as a side
+    /// effect (e.g. "challenge_accepted") through the notification queue.
+    fn check_challenges_for_command(&mut self, command: &str) {
+        // Snapshot unlocked achievements: check_command routes the
+        // "first_challenge" event into UserStats internally, so newly
+        // unlocked achievements have to be diffed, not returned
+        let unlocked_before = self.user_stats.achievements.unlocked.clone();
+
+        let completed = self
+            .challenge_manager
+            .check_command(command, &mut self.user_stats);
+
+        if let Some(ref challenge) = completed {
+            self.queue_notification(
+                crate::panels::notification::NotificationPanel::challenge(challenge),
+            );
+            self.telemetry_record(arct_telemetry::TelemetryEvent::FeatureUsed {
+                feature: "challenge_completed".to_string(),
+                context: None,
+            });
+        }
+
+        // Surface achievements unlocked inside check_command
+        for achievement in arct_core::all_achievements() {
+            if self.user_stats.achievements.is_unlocked(&achievement.id)
+                && !unlocked_before.contains(&achievement.id)
+            {
+                self.queue_notification(
+                    crate::panels::notification::NotificationPanel::achievement(&achievement),
+                );
+            }
+        }
+
+        if completed.is_some() {
+            self.save_session();
         }
     }
 
     /// Check for newly unlocked achievements and queue notifications
     pub fn check_and_unlock_achievements(&mut self) {
-        let newly_unlocked = self.user_stats.check_achievements();
+        let newly_unlocked = self
+            .user_stats
+            .check_achievements_with_library(&self.lesson_library);
 
-        // Add to pending queue
-        for achievement in newly_unlocked {
-            self.pending_achievements.push(achievement);
-        }
-
-        // Show first notification if we're not already showing one
-        if self.showing_notification.is_none() && !self.pending_achievements.is_empty() {
-            self.show_next_achievement_notification();
-        }
-    }
-
-    /// Show the next achievement notification from the queue
-    fn show_next_achievement_notification(&mut self) {
-        if let Some(achievement) = self.pending_achievements.first() {
-            self.showing_notification = Some(crate::panels::notification::NotificationPanel::new(
-                achievement.clone(),
-            ));
+        if !newly_unlocked.is_empty() {
+            for achievement in &newly_unlocked {
+                self.queue_notification(
+                    crate::panels::notification::NotificationPanel::achievement(achievement),
+                );
+            }
+            self.save_session();
         }
     }
 
-    /// Dismiss the current achievement notification and show next if any
+    /// Queue a notification popup (shown immediately if none is showing)
+    fn queue_notification(&mut self, notification: crate::panels::notification::NotificationPanel) {
+        if self.showing_notification.is_none() {
+            self.showing_notification = Some(notification);
+            // Restart the celebratory border animation
+            self.notification_ticks = 0;
+        } else {
+            self.pending_notifications.push(notification);
+        }
+    }
+
+    /// Dismiss the current notification and show the next queued one, if any
     fn dismiss_notification(&mut self) {
         self.showing_notification = None;
 
-        // Remove the first achievement from queue if it was shown
-        if !self.pending_achievements.is_empty() {
-            self.pending_achievements.remove(0);
-        }
-
-        // Show next notification if there are more
-        if !self.pending_achievements.is_empty() {
-            self.show_next_achievement_notification();
+        if !self.pending_notifications.is_empty() {
+            self.showing_notification = Some(self.pending_notifications.remove(0));
+            self.notification_ticks = 0;
         }
     }
 
@@ -1994,16 +3089,209 @@ impl App {
         }
     }
 
-    /// Record lesson completion and check for achievements
-    pub fn record_lesson_completion(&mut self, lesson_id: String, difficulty: arct_core::Difficulty) {
+    /// Record lesson completion and check for achievements.
+    ///
+    /// `estimated_minutes` / `elapsed_secs` / `wrong_answers` feed the
+    /// "speed_lesson" and "perfect_lesson" achievement events.
+    pub fn record_lesson_completion(
+        &mut self,
+        lesson_id: String,
+        difficulty: arct_core::Difficulty,
+        estimated_minutes: u32,
+        elapsed_secs: u64,
+        wrong_answers: usize,
+    ) {
         // Record in stats
-        self.user_stats.record_lesson_completion(lesson_id.clone(), difficulty);
+        self.user_stats
+            .record_lesson_completion(lesson_id.clone(), difficulty);
 
-        // Add to completed lessons set
-        self.completed_lessons.insert(lesson_id);
+        // Add to completed lessons set and clear any step-level resume state
+        self.completed_lessons.insert(lesson_id.clone());
+        self.lesson_progress.remove(&lesson_id);
 
-        // Check for newly unlocked achievements
+        // Celebration banner in the output area — completing a lesson
+        // should feel like a moment
+        let lesson_title = self
+            .lesson_library
+            .get(&lesson_id)
+            .map(|l| l.title.clone())
+            .unwrap_or_else(|| lesson_id.clone());
+        let xp = crate::level::lesson_xp(difficulty);
+        self.last_output = format!(
+            "{}\n{}",
+            crate::celebrate::banner("LESSON COMPLETE!", &lesson_title, xp),
+            self.last_output
+        );
+        self.output_scroll = 0;
+
+        // Speed / perfect lesson events
+        if elapsed_secs < u64::from(estimated_minutes) * 60 {
+            self.record_feature_event("speed_lesson");
+        }
+        if wrong_answers == 0 {
+            self.record_feature_event("perfect_lesson");
+        }
+
+        // Check for newly unlocked achievements (uses the full library so
+        // per-difficulty totals include user lesson packs)
         self.check_and_unlock_achievements();
+        self.save_session();
+
+        self.telemetry_record(arct_telemetry::TelemetryEvent::FeatureUsed {
+            feature: "lesson_completed".to_string(),
+            context: None,
+        });
+
+        // Recommend what to learn next
+        let recommendations = self.recommendation_engine.get_recommendations(
+            &self.completed_lessons,
+            &self.user_stats,
+            1,
+        );
+        if let Some(rec) = recommendations.first() {
+            self.last_output.push_str(&format!(
+                "\n{}Next up: {} — press m for the menu\n",
+                icons::target().content,
+                rec.lesson.title
+            ));
+        }
+    }
+
+    /// Persist the current lesson's step position for step-level resume
+    fn save_lesson_progress(&mut self) {
+        let state = self.lesson_panel.as_ref().and_then(|panel| {
+            panel.current_lesson.as_ref().map(|lesson| {
+                (
+                    lesson.id.clone(),
+                    crate::persistence::LessonResumeState {
+                        current_step_index: panel.current_step_index(),
+                        completed_steps: panel.completed_steps().to_vec(),
+                    },
+                )
+            })
+        });
+
+        if let Some((lesson_id, state)) = state {
+            self.lesson_progress.insert(lesson_id, state);
+            self.save_session();
+        }
+    }
+
+    /// Go back one lesson step (Alt+Left in lesson mode)
+    fn lesson_previous_step(&mut self) {
+        if !self.lesson_mode {
+            return;
+        }
+
+        let moved = match self.lesson_panel.as_mut() {
+            Some(panel) if panel.current_lesson.is_some() => {
+                if panel.current_step_index() > 0 {
+                    panel.previous_step();
+                    Some(panel.current_step_index())
+                } else {
+                    None
+                }
+            }
+            _ => return,
+        };
+
+        match moved {
+            Some(step_index) => {
+                self.last_output = format!(
+                    "{}Went back to step {}.\n",
+                    icons::lesson().content,
+                    step_index + 1
+                );
+                self.save_lesson_progress();
+            }
+            None => {
+                self.last_output = format!(
+                    "{}Already at the first step of this lesson.\n",
+                    icons::hint().content
+                );
+            }
+        }
+    }
+
+    /// Restart the current lesson from step 1 (Alt+R in lesson mode)
+    fn lesson_restart(&mut self) {
+        if !self.lesson_mode {
+            return;
+        }
+
+        let lesson_id = match self.lesson_panel.as_mut() {
+            Some(panel) if panel.current_lesson.is_some() => {
+                panel.restart();
+                panel.current_lesson.as_ref().map(|l| l.id.clone())
+            }
+            _ => return,
+        };
+
+        if let Some(lesson_id) = lesson_id {
+            self.lesson_progress.remove(&lesson_id);
+            self.save_session();
+            self.last_output = format!(
+                "{}Lesson restarted from step 1.\n",
+                icons::lesson().content
+            );
+
+            // In real practice mode, restarting also wipes and re-materializes
+            // the lesson's playground directory (safe: deletion is confined to
+            // ~/ArcAcademy/playground with canonical-prefix verification)
+            if self.practice_mode_is_real() {
+                if self.playground.as_ref().map(|p| p.has_lesson()) != Some(true) {
+                    self.prepare_lesson_environment();
+                }
+                match self.playground.as_mut().map(|p| p.reset_lesson()) {
+                    Some(Ok(_)) => {
+                        self.last_output.push_str(&format!(
+                            "{}Playground wiped — starter files restored.\n",
+                            icons::success().content
+                        ));
+                    }
+                    Some(Err(e)) => {
+                        self.last_output.push_str(&format!(
+                            "{}Could not reset the playground: {}\n",
+                            icons::warning().content,
+                            e
+                        ));
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+
+    /// Execute a command selected from the command palette.
+    ///
+    /// Everything routes through the normal `Action` dispatch so behavior
+    /// stays in one place; the only special cases are direct theme selection
+    /// and opening the lesson menu from outside lesson mode.
+    async fn execute_palette_command(
+        &mut self,
+        command: crate::panels::command_palette::PaletteCommand,
+    ) -> Result<()> {
+        use crate::panels::command_palette::PaletteCommand;
+
+        match command {
+            PaletteCommand::SetTheme(name) => {
+                let from = self.theme.name.clone();
+                self.theme = Theme::from_name(name);
+                self.record_feature_event("change_theme");
+                self.telemetry_record(arct_telemetry::TelemetryEvent::ThemeChanged {
+                    from,
+                    to: name.to_string(),
+                });
+                Ok(())
+            }
+            PaletteCommand::Action(Action::ShowLessonMenu) if !self.lesson_mode => {
+                // The lesson menu only exists in lesson mode; entering lesson
+                // mode opens the menu automatically
+                self.toggle_lesson_mode();
+                Ok(())
+            }
+            PaletteCommand::Action(action) => self.handle_action(action).await,
+        }
     }
 }
 

@@ -1,195 +1,82 @@
 # Interactive Lessons Guide
 
-## How to Use Lessons
+## Starting a Lesson
 
-### Starting a Lesson
+1. Launch Arc Academy Terminal: `arct`
+2. Press `Ctrl+L` to open the **lesson map**
+3. Pick a lesson with `↑/↓` and `Enter` — or click it
 
-1. **Launch Arc Academy Terminal**:
-   ```bash
-   cargo run --release
-   ```
+The lesson map groups lessons by difficulty and shows your state at a glance:
+`✓` completed · `▶` available · `🔒` locked (the map tells you which prerequisite unlocks it) · `◐ 3/8` partially done (you'll resume where you left off).
 
-2. **Activate Lesson Mode**:
-   - Press `F2` to toggle lesson mode ON
-   - You'll see "📖 LESSON MODE" in the header
-   - The right panel changes from "Learning" to show the lesson
-
-3. **The lesson "Navigation Basics" auto-loads on first activation**
-
-### Lesson Controls
+## Lesson Controls
 
 | Key | Action |
 |-----|--------|
-| `F2` | Toggle lesson mode ON/OFF (primary) |
-| `Ctrl+E` | Alternative toggle (if your terminal supports it) |
-| `Tab` | Switch between panels |
-| `Enter` | Submit your command answer |
-| `?` | Show help overlay |
+| `Ctrl+L` | Toggle lesson mode / open the lesson map |
+| `Enter` | Submit your answer |
+| `Alt+←` | Go back one step |
+| `Alt+R` | Restart the lesson |
+| `Ctrl+K` | Command palette (mode toggles, playground reset, everything) |
+| `?` | Help overlay |
 
-### How Lessons Work
+The footer bar always shows the keys available right now.
 
-#### Command Exercises
-When you see a step like:
-```
-Step 1: Understanding Your Current Location
-Type the command to print your current working directory.
+## Practice Modes
 
-💡 Hint: The command is 'pwd' (print working directory)
-```
+### Simulated sandbox (default)
+Commands run against a virtual filesystem. Nothing can touch your real system. Supported commands include `pwd`, `ls`, `cd`, `cat`, `mkdir`, `touch`, `rm`, `mv`, `cp`, `grep`, `head`, `tail`, `wc`, `echo` (with `>`/`>>`), and `chmod`. Commands that can't be simulated (e.g. `git`, `ps`) tell you so — those steps check your command syntax.
 
-**What to do:**
-1. Type the command in the Shell panel (top right)
-2. Press `Enter`
-3. The system validates your answer:
-   - ✅ **Correct**: Automatically moves to next step
-   - ❌ **Incorrect**: Shows hint and lets you try again
+### Real-filesystem playground
+Open the command palette (`Ctrl+K`) → **Toggle Real-Filesystem Practice**. Lessons then run through your real shell inside `~/ArcAcademy/playground/<lesson-id>/`, pre-populated with starter files (logs, notes, sample data).
 
-#### Multiple Choice Questions
-When you see a quiz:
-```
-Step 6: Quiz: What does 'cd ..' do?
+A safety guard keeps practice contained:
+- Commands stay inside the playground — absolute paths, `~`, and `..` escapes are refused with a friendly explanation
+- Catastrophic patterns (`rm -rf /`, `sudo`, fork bombs, `dd of=/dev/...`) are blocked with a short lesson on *why* they're dangerous
+- **Reset Lesson Playground** (in the palette) wipes and rebuilds the lesson's directory
 
-❓ What does the command 'cd ..' do?
+Your work in the playground persists between sessions until you reset it.
 
-  0. Goes to the home directory
-  1. Goes up one directory level (to the parent)
-  2. Lists files in the current directory
-  3. Creates a new directory
+## Step Types
 
-▶ Enter the number of your answer
-```
+- **Command exercises** — type the command in the shell panel and press `Enter`. Correct advances; incorrect shows a hint and lets you retry. Flag order doesn't matter where it shouldn't (`ls -la` == `ls -al`).
+- **Multiple choice** — type the number of your answer and press `Enter`.
+- **Information steps** — read, then press `Enter` to continue.
 
-**What to do:**
-1. Type the number (0, 1, 2, or 3)
-2. Press `Enter`
-3. Correct answer shows explanation and moves forward
-4. Wrong answer lets you try again
+## Available Lessons
 
-#### Information Steps
-Some steps just display information:
-```
-Step 7: Pro Tip: cd -
+### Beginner
+| Lesson | Time | Covers |
+|--------|------|--------|
+| Navigation Basics | 10 min | `pwd`, `ls`, `cd`, `cd ~`, `cd ..`, `cd -` |
+| File Management Basics | 15 min | `mkdir`, `touch`, `cp`, `mv`, safe `rm -i` |
+| What NOT to Do | 15 min | force flags, wildcards, `rm -rf` disasters, safety habits |
+| File Viewing & Reading | 12 min | `cat`, `less`, `head`, `tail`, `grep` |
+| Package Management | ~10 min | `apt`/package basics |
+| Network Basics | ~10 min | `ping`, `curl`, network tools |
+| Git Fundamentals | ~10 min | `init`, `add`, `commit`, `push`, `pull` |
 
-Pro tip: 'cd -' is a super useful command! It takes you back to your
-previous directory. Try it:
+### Intermediate
+| Lesson | Time | Covers |
+|--------|------|--------|
+| Permissions & Ownership | 15 min | `chmod`, `chown`, permission bits |
+| Process Management | ~10 min | `ps`, `top`, `kill` |
+| Text Processing with Pipes | ~12 min | `grep`, pipes, `sort`, `uniq`, `wc` |
 
-  cd /tmp
-  cd ~
-  cd -    # Takes you back to /tmp!
+Prerequisites gate the progression (e.g. File Management requires Navigation Basics) — the lesson map shows exactly what unlocks what. When you finish a lesson, the recommendation engine suggests your next one.
 
-▶ Press Enter to continue
-```
+## Progress, XP, and Achievements
 
-**What to do:**
-1. Read the information
-2. Press `Enter` to continue
+- Lesson completion, streaks, and time invested are tracked locally (`Alt+P` for the progress dashboard)
+- Finishing a lesson fast earns **Speed Learner**; finishing with no wrong answers earns **Perfectionist**
+- Daily and weekly challenges (`Alt+C`) complete when you run a matching command in the shell
 
-### Progress Tracking
+## Writing Your Own Lessons
 
-The lesson panel header shows:
-```
-📖 Navigation Basics | Step 3/8 | 25%
-```
-
-- **Current step** / Total steps
-- **Completion percentage**
-- Steps you've completed are tracked
-
-### Available Lessons
-
-#### 1. Navigation Basics (10 min, Beginner 🌱)
-Learn essential navigation commands:
-- `pwd` - Print working directory
-- `ls` - List files (with -l, -a, -h flags)
-- `cd` - Change directory
-- `cd ~` - Go home
-- `cd ..` - Go up one level
-- `cd -` - Toggle to previous directory
-
-**8 Steps**: Command exercises, quizzes, and pro tips
-
-#### 2. File Management (15 min, Beginner 🌱)
-Learn to manage files safely:
-- `mkdir` - Create directories
-- `touch` - Create files
-- `cp` - Copy files
-- `mv` - Move/rename files
-- `rm -i` - Delete safely (with confirmation)
-
-**7 Steps**: Includes safety quiz and strong warnings about rm -rf
-
-### Lesson Completion
-
-When you finish all steps:
-```
-🎉 Congratulations! You've completed this lesson!
-
-Press F2 to exit lesson mode.
-```
-
-Press `F2` to:
-- Return to normal shell mode
-- Try another lesson (future feature)
-- Continue practicing what you learned
-
-## Tips
-
-### Best Practices
-1. **Read each step carefully** - Instructions tell you exactly what to do
-2. **Use the hints** - They're there to help you learn
-3. **Don't rush** - Take time to understand each concept
-4. **Practice outside lessons** - Try commands in normal shell mode too
-
-### Common Issues
-
-**Q: F2 doesn't work / I prefer keyboard shortcuts**
-- Try `Ctrl+E` as an alternative (works in some terminals)
-- Some terminals may intercept F2 - check your terminal settings
-- If both fail, this is usually a terminal emulator configuration issue
-
-**Q: I pressed F2/Ctrl+E but don't see a lesson**
-- The lesson should auto-load. Try pressing `F2` twice to toggle off and on again
-- Check the Output panel for activation message
-- Make sure you're not in the onboarding wizard or settings panel
-
-**Q: My command was correct but it says it's wrong**
-- Check spacing and spelling exactly
-- Some steps accept multiple variations (e.g., "ls -lh" or "ls -hl")
-- Read the hint for the expected format
-
-**Q: I want to skip a step**
-- Currently not supported - lessons are designed to be completed in order
-- Each step builds on previous knowledge
-
-**Q: How do I go back to a previous step?**
-- Currently not supported - lessons move forward only
-- You can restart by toggling lesson mode off and on (Ctrl+E twice)
-
-## Coming Soon
-
-### Planned Lessons
-- **Text Processing** - grep, sed, awk
-- **Git Fundamentals** - init, add, commit, push, pull
-- **System Administration** - systemctl, journalctl, users
-- **Shell Scripting Intro** - variables, loops, conditionals
-
-### Planned Features
-- Lesson selection menu
-- Progress persistence (save your place)
-- Achievement badges
-- Step navigation (next/previous)
-- Lesson restart option
-- Custom user lessons
-
-## Development
-
-Want to create your own lesson? See the lesson framework in:
-- `crates/arct-core/src/lesson.rs` - Core data structures
-- `crates/arct-tui/src/panels/lesson.rs` - UI rendering
-- Look at `create_navigation_basics_lesson()` for an example
+Lessons are plain TOML files. Drop them in `~/.config/arct/lessons/` and they appear in the lesson map (same `id` overrides a built-in). The full format — including `[[setup]]` starter files materialized into the practice environment — is documented in the `Lesson` doc comment in `crates/arct-core/src/lesson.rs`, and every built-in lesson serializes to the same format if you want examples.
 
 ---
 
 **Happy Learning!** 🚀
 
-For issues or questions, visit: https://github.com/metarobb/arc-academy-terminal
+For issues or questions: https://github.com/metarobb/arc-academy-terminal/issues

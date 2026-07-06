@@ -15,10 +15,10 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.2.2"
+version = "1.0.0"
 edition = "2021"
 authors = ["Arc Academy"]
-license = "MIT"
+license = "GPL-2.0-only"
 repository = "https://github.com/metarobb/arc-academy-terminal"
 homepage = "https://arcacademy.sh"
 exclude = [
@@ -73,6 +73,7 @@ clap = { version = "4.5", features = ["derive", "cargo", "env"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 shellwords = "1.1"
+regex = "1.10"
 
 [profile.release]
 opt-level = 3

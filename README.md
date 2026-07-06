@@ -1,45 +1,48 @@
 # Arc Academy Terminal
 
-> Learn shell commands interactively with AI-powered explanations
+> Learn shell commands interactively — real explanations, real practice, real files
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
 [![Website](https://img.shields.io/badge/website-arcacademy.sh-blue)](https://arcacademy.sh)
 
-Arc Academy Terminal is a modern, interactive TUI (Terminal User Interface) that helps you learn shell commands through real-time explanations, AI assistance, and hands-on practice.
+Arc Academy Terminal is a modern, interactive TUI (Terminal User Interface) that makes the Linux command line approachable: guided lessons, instant explanations for every command you run, gamified progress, and a safe place to practice — simulated or on real files.
 
 ## Features
 
-- **Interactive Lessons** - Learn Linux/Bash step-by-step with guided lessons (Press Ctrl+L)
-  - Safe virtual filesystem sandbox for practice
-  - Real-time directory tree visualization
-  - Hands-on exercises with instant validation
-- **Interactive Shell** - Execute commands and see live output with ANSI color support
-- **Real-time Learning** - Get instant explanations for every command you run
-- **AI Assistant** - Ask questions about shell commands using OpenAI, Anthropic, or local LLMs
-- **Progress Tracking** - Skill levels, daily streaks, and achievement tracking
-- **Smart Autocomplete** - Tab completion for commands and file paths
-- **Command History** - Navigate through your command history with arrow keys
-- **Shell Builtins** - Built-in `cd`, `history`, `export`, and `alias` commands
-- **Beautiful Themes** - Multiple color schemes (Orange, Green, Dark, Light)
-- **Privacy-First Analytics** - Local-only progress tracking with SQLite
-- **Session Persistence** - Your history and configuration are saved between sessions
+### Learning
+- **10 interactive lessons** across Beginner and Intermediate levels — navigation, file management, safety (what NOT to do), file viewing, permissions, processes, text processing & pipes, package management, networking, and Git
+- **Visual lesson map** — lessons grouped by difficulty with ✓ completed / ▶ available / 🔒 locked states, prerequisites, and resume indicators (`Ctrl+L`)
+- **Two practice modes**:
+  - **Simulated sandbox** (default) — a virtual filesystem that can't touch your system
+  - **Real-filesystem playground** — practice with real commands on real files inside `~/ArcAcademy/playground`, protected by a safety guard that blocks escapes and explains *why* dangerous commands are dangerous
+- **Step-level resume** — leave mid-lesson, pick up exactly where you were; step back with `Alt+←`, restart with `Alt+R`
+- **Real-time explanations** for every command you run in the shell
+- **AI assistant** — ask questions using OpenAI, Anthropic, or local LLMs (`Ctrl+A`)
+- **Custom lesson packs** — drop TOML lesson files in `~/.config/arct/lessons/` (see the format docs in `crates/arct-core/src/lesson.rs`)
+
+### Motivation
+- **Welcome dashboard** — streak, level/XP, daily challenge, and your next recommended lesson at launch
+- **30 achievements**, daily & weekly challenges completed by actually running matching commands
+- **Progress dashboard** — XP gauge, per-difficulty completion bars, 14-day activity calendar (`Alt+P`)
+
+### Terminal experience
+- **Real interactive shell** with live ANSI-color output, tab autocomplete, command history, and builtins (`cd`, `history`, `export`, `alias`)
+- **Command palette** (`Ctrl+K`) — every feature searchable and reachable from one place
+- **Context-sensitive footer bar** — the keys you need are always visible
+- **Mouse support** — click to focus panels, scroll output, click menu rows
+- **6 themes** — Arc Academy Orange, Arc Academy Green, Arc Dark, Arc Light, Night, Mocha (`Ctrl+T`)
+- **Privacy-first** — progress is stored locally (SQLite); telemetry is local-only and **off by default**
 
 ## Installation
 
 ### Quick Install (Recommended)
 
-**One command - installs Rust automatically if needed:**
+**One command — installs Rust automatically if needed:**
 
 ```bash
 curl -fsSL https://arcacademy.sh/install.sh | bash
 ```
-
-This script will:
-- ✅ Detect your platform (Linux/macOS/Windows)
-- ✅ Install Rust/Cargo if not already installed
-- ✅ Install Arc Academy Terminal from crates.io
-- ✅ Configure your PATH automatically
 
 ### Alternative: Cargo (if you already have Rust)
 
@@ -55,58 +58,69 @@ cd arc-academy-terminal
 cargo install --path crates/arct-cli
 ```
 
-### Development Version
-
-```bash
-cargo install --git https://github.com/metarobb/arc-academy-terminal arct-cli
-```
-
 ## Quick Start
 
 ```bash
 # Start the interactive TUI
 arct
 
-# Show version
-arct --version
+# Start with a specific theme
+arct start --theme night
 
-# Get command explanation (non-interactive)
+# Use an alternate config file
+arct --config /path/to/config.toml
+
+# Get a command explanation without the TUI
 arct explain "ls -lah"
 ```
 
-## Using Lessons
+## Learning with Lessons
 
-Arc Academy Terminal includes interactive lessons that teach you shell commands in a safe, sandboxed environment:
+1. Press `Ctrl+L` to open the lesson map
+2. Pick a lesson — locked ones show which prerequisite unlocks them
+3. Follow the steps: type commands, answer quizzes, read pro tips
+4. Your place is saved automatically; come back any time
 
-1. **Start a lesson**: Press `Ctrl+L` to enter lesson mode
-2. **Follow along**: The lesson panel guides you through each step
-3. **Practice safely**: Navigate a virtual filesystem that won't affect your real system
-4. **See your progress**: Watch the directory tree update in real-time as you practice commands
-5. **Exit lessons**: Press `Ctrl+L` again to return to normal mode
-
-Available lessons:
-- **Navigation Basics** - Learn `pwd`, `cd`, and `ls` commands with hands-on practice
+Want to practice on real files? Open the command palette (`Ctrl+K`) and choose **Toggle Real-Filesystem Practice**. Lessons then run in `~/ArcAcademy/playground/<lesson>/` with starter files, and a guard keeps every command inside the playground.
 
 ## Keyboard Shortcuts
 
-- `Ctrl+L` - Toggle lesson mode
-- `Ctrl+A` - Toggle AI assistant
-- `Ctrl+T` - Cycle through themes
-- `Ctrl+S` - Open settings
-- `?` - Show help
-- `q` or `Ctrl+C` - Quit
-- `Tab` - Switch between panels / Autocomplete commands
-- `↑/↓` - Navigate command history or scroll output
+| Key | Action |
+|-----|--------|
+| `Ctrl+K` | Command palette (everything is in here) |
+| `Ctrl+L` | Toggle lesson mode (opens the lesson map) |
+| `Alt+←` / `Alt+R` | Previous lesson step / restart lesson |
+| `Ctrl+A` | AI assistant |
+| `Ctrl+T` | Cycle themes |
+| `Ctrl+S` | Settings |
+| `Alt+A` / `Alt+P` / `Alt+C` | Achievements / Progress / Challenges |
+| `?` | Help |
+| `Tab` | Switch panels / autocomplete |
+| `↑/↓` | Command history / scroll |
+| `q` or `Ctrl+C` | Quit |
+
+The footer bar always shows the shortcuts relevant to where you are.
 
 ## Configuration
 
-Configuration file: `~/.config/arct/config.toml`
+Configuration file: `~/.config/arct/config.toml` (created with `0600` permissions since it may hold an AI API key).
 
-See the full documentation for configuration options.
+Useful keys:
+
+```toml
+[general]
+command_timeout = 5            # seconds before a shell command is killed
+
+[lessons]
+practice_mode = "simulated"    # or "real" for the playground
+
+[telemetry]
+enabled = false                # local-only SQLite stats, off by default
+```
 
 ## License
 
-MIT License
+GPL-2.0. See [LICENSE](LICENSE).
 
 ## Links
 

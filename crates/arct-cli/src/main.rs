@@ -126,19 +126,17 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    // Load config if specified
-    if let Some(config_path) = cli.config {
+    if let Some(ref config_path) = cli.config {
         tracing::info!("Using config from: {}", config_path.display());
-        // TODO: Pass custom config path to app
     }
 
     match cli.command {
         None | Some(Commands::Start { .. }) => {
             // Default: run TUI
-            run_tui(cli.command).await?;
+            run_tui(cli.command, cli.config).await?;
         }
         Some(Commands::Config { action }) => {
-            handle_config(action)?;
+            handle_config(action, cli.config.as_deref())?;
         }
         Some(Commands::Explain { command }) => {
             handle_explain(&command)?;
@@ -157,12 +155,17 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_tui(command: Option<Commands>) -> Result<()> {
+async fn run_tui(command: Option<Commands>, config_path: Option<PathBuf>) -> Result<()> {
+    let mut options = arct_tui::RunOptions {
+        config_path,
+        theme: None,
+    };
+
     // Apply any start options
     if let Some(Commands::Start { theme, dir }) = command {
         if let Some(theme_name) = theme {
             tracing::info!("Starting with theme: {}", theme_name);
-            // TODO: Pass theme to app
+            options.theme = Some(theme_name);
         }
         if let Some(working_dir) = dir {
             std::env::set_current_dir(&working_dir)?;
@@ -171,20 +174,28 @@ async fn run_tui(command: Option<Commands>) -> Result<()> {
     }
 
     // Run the TUI
-    arct_tui::run().await?;
+    arct_tui::run_with_options(options).await?;
 
     Ok(())
 }
 
-fn handle_config(action: ConfigAction) -> Result<()> {
+fn handle_config(action: ConfigAction, config_override: Option<&std::path::Path>) -> Result<()> {
+    // Honor a global --config <path> override; fall back to the default path
+    let config_path = match config_override {
+        Some(path) => path.to_path_buf(),
+        None => arct_config::get_config_file_path()?,
+    };
+
     match action {
         ConfigAction::Show => {
-            let config = arct_config::Config::load()?;
+            let config = match config_override {
+                Some(path) => arct_config::Config::load_from(path)?,
+                None => arct_config::Config::load()?,
+            };
             let toml_str = toml::to_string_pretty(&config)?;
             println!("{}", toml_str);
         }
         ConfigAction::Edit => {
-            let config_path = arct_config::get_config_file_path()?;
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
 
             println!("Opening config in {}...", editor);
@@ -208,16 +219,13 @@ fn handle_config(action: ConfigAction) -> Result<()> {
             }
 
             let config = arct_config::Config::default();
-            config.save()?;
+            config.save_to(&config_path)?;
             println!("✓ Configuration reset to defaults");
         }
         ConfigAction::Path => {
-            let config_path = arct_config::get_config_file_path()?;
             println!("{}", config_path.display());
         }
         ConfigAction::Init { force } => {
-            let config_path = arct_config::get_config_file_path()?;
-
             if config_path.exists() && !force {
                 eprintln!("Config file already exists: {}", config_path.display());
                 eprintln!("Use --force to overwrite");
@@ -225,7 +233,7 @@ fn handle_config(action: ConfigAction) -> Result<()> {
             }
 
             let config = arct_config::Config::default();
-            config.save()?;
+            config.save_to(&config_path)?;
             println!("✓ Created config file: {}", config_path.display());
         }
     }

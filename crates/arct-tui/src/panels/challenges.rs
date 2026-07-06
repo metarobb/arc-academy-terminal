@@ -112,7 +112,7 @@ impl ChallengesPanel {
                     if daily_completed {
                         "Completed! Come back tomorrow for a new challenge."
                     } else {
-                        "Complete this challenge in lesson mode to earn points!"
+                        "Run a matching command in the shell to complete it!"
                     },
                     if daily_completed {
                         theme.style_success()
@@ -181,7 +181,7 @@ impl ChallengesPanel {
                     if weekly_completed {
                         "Completed! New challenge arrives next week."
                     } else {
-                        "Complete this multi-step challenge for big rewards!"
+                        "Run commands matching each step, in order, to complete it!"
                     },
                     if weekly_completed {
                         theme.style_success()
@@ -212,7 +212,7 @@ impl ChallengesPanel {
         let controls = Paragraph::new(vec![Line::from(vec![
             Span::styled("Esc", theme.style_accent()),
             Span::raw(" or "),
-            Span::styled("c", theme.style_accent()),
+            Span::styled("Alt+C", theme.style_accent()),
             Span::raw(" to close"),
         ])])
         .alignment(Alignment::Center);

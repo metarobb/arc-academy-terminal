@@ -19,6 +19,10 @@ pub struct LessonPanel {
     validator: LessonValidator,
     last_validation: Option<ValidationResult>,
     completed_steps: Vec<usize>,
+    /// When this lesson run started (for the "speed_lesson" achievement)
+    started_at: Option<std::time::Instant>,
+    /// Wrong answers in this lesson run (for the "perfect_lesson" achievement)
+    wrong_answers: usize,
 }
 
 impl LessonPanel {
@@ -30,16 +34,68 @@ impl LessonPanel {
             validator: LessonValidator::new(),
             last_validation: None,
             completed_steps: Vec::new(),
+            started_at: None,
+            wrong_answers: 0,
         }
     }
 
-    /// Load a lesson
+    /// Load a lesson (fresh run starting at step 0)
     pub fn load_lesson(&mut self, lesson: Lesson) {
         self.current_lesson = Some(lesson);
         self.current_step_index = 0;
         self.user_input.clear();
         self.last_validation = None;
         self.completed_steps.clear();
+        self.started_at = Some(std::time::Instant::now());
+        self.wrong_answers = 0;
+    }
+
+    /// Resume a previously started lesson at a saved step.
+    ///
+    /// Returns the (0-based) step index actually resumed at (clamped to the
+    /// lesson's step count).
+    pub fn resume_at(&mut self, step_index: usize, completed_steps: Vec<usize>) -> usize {
+        if let Some(lesson) = &self.current_lesson {
+            let max = lesson.steps.len().saturating_sub(1);
+            self.current_step_index = step_index.min(max);
+            self.completed_steps = completed_steps
+                .into_iter()
+                .filter(|&s| s < lesson.steps.len())
+                .collect();
+        }
+        self.current_step_index
+    }
+
+    /// Restart the current lesson from step 0
+    pub fn restart(&mut self) {
+        self.current_step_index = 0;
+        self.user_input.clear();
+        self.last_validation = None;
+        self.completed_steps.clear();
+        self.started_at = Some(std::time::Instant::now());
+        self.wrong_answers = 0;
+    }
+
+    /// Current (0-based) step index
+    pub fn current_step_index(&self) -> usize {
+        self.current_step_index
+    }
+
+    /// Steps completed so far in this run (0-based indices)
+    pub fn completed_steps(&self) -> &[usize] {
+        &self.completed_steps
+    }
+
+    /// Seconds elapsed since this lesson run started
+    pub fn elapsed_seconds(&self) -> u64 {
+        self.started_at
+            .map(|s| s.elapsed().as_secs())
+            .unwrap_or(0)
+    }
+
+    /// Wrong answers recorded during this lesson run
+    pub fn wrong_answers(&self) -> usize {
+        self.wrong_answers
     }
 
     /// Get current step
@@ -91,6 +147,12 @@ impl LessonPanel {
                     message: "Continue.".to_string(),
                 },
             };
+
+            // Track wrong answers for the "perfect_lesson" achievement
+            // (Information steps never fail, so this only counts real misses)
+            if !result.is_success() {
+                self.wrong_answers += 1;
+            }
 
             self.last_validation = Some(result.clone());
             result
@@ -144,25 +206,71 @@ impl LessonPanel {
         }
     }
 
-    /// Render the lesson panel
-    pub fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+    /// Header line describing where lesson commands execute
+    fn practice_mode_line(practice_real: bool, theme: &Theme) -> Line<'static> {
+        if practice_real {
+            Line::from(vec![Span::styled(
+                "REAL FILES — ~/ArcAcademy/playground",
+                theme
+                    .style_warning()
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )])
+        } else {
+            Line::from(vec![Span::styled(
+                "SIMULATED SANDBOX",
+                theme.style_dim(),
+            )])
+        }
+    }
+
+    /// Render the lesson panel.
+    ///
+    /// `practice_real` selects the header badge: real-filesystem playground
+    /// vs the simulated sandbox.
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        focused: bool,
+        theme: &Theme,
+        practice_real: bool,
+    ) {
         let border_style = if focused {
             theme.style_border_focused()
         } else {
             theme.style_border()
         };
 
+        let title_style = theme.style_title(focused);
+
         if let Some(lesson) = &self.current_lesson {
             // Render current step (includes header info in title)
             if let Some(step) = self.current_step() {
-                self.render_step(frame, area, lesson, step, theme, border_style);
+                self.render_step(
+                    frame,
+                    area,
+                    lesson,
+                    step,
+                    theme,
+                    border_style,
+                    title_style,
+                    practice_real,
+                );
             }
         } else {
             // No lesson loaded - show lesson selection screen
-            self.render_lesson_selection(frame, area, theme, border_style);
+            self.render_lesson_selection(
+                frame,
+                area,
+                theme,
+                border_style,
+                title_style,
+                practice_real,
+            );
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_step(
         &self,
         frame: &mut Frame,
@@ -171,8 +279,13 @@ impl LessonPanel {
         step: &LessonStep,
         theme: &Theme,
         border_style: Style,
+        title_style: Style,
+        practice_real: bool,
     ) {
         let mut lines = Vec::new();
+
+        // Practice-mode header: where do the commands actually run?
+        lines.push(Self::practice_mode_line(practice_real, theme));
 
         // Step title - always show
         lines.push(Line::from(vec![
@@ -316,6 +429,7 @@ impl LessonPanel {
 
         let block = Block::default()
             .title(title)
+            .title_style(title_style)
             .borders(Borders::ALL)
             .border_style(border_style)
             .style(theme.style_block());
@@ -332,15 +446,18 @@ impl LessonPanel {
         area: Rect,
         theme: &Theme,
         border_style: Style,
+        title_style: Style,
+        practice_real: bool,
     ) {
         let block = Block::default()
             .title(format!(" {}Interactive Lessons ", icons::lesson().content))
+            .title_style(title_style)
             .borders(Borders::ALL)
             .border_style(border_style)
             .style(theme.style_block());  // Set background for light themes
 
         let paragraph = Paragraph::new(vec![
-            Line::from(""),
+            Self::practice_mode_line(practice_real, theme),
             Line::from(vec![
                 icons::welcome(),
                 Span::styled("Welcome to Interactive Lessons!", theme.style_accent()),

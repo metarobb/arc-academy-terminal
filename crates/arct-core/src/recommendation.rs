@@ -44,11 +44,17 @@ pub struct RecommendationEngine {
 }
 
 impl RecommendationEngine {
-    /// Create a new recommendation engine with a lesson library
+    /// Create a new recommendation engine with the built-in lesson library
     pub fn new() -> Self {
         Self {
             library: LessonLibrary::new(),
         }
+    }
+
+    /// Create a recommendation engine backed by a specific lesson library
+    /// (e.g. built-ins merged with user lesson packs)
+    pub fn with_library(library: LessonLibrary) -> Self {
+        Self { library }
     }
 
     /// Get personalized lesson recommendations for a user

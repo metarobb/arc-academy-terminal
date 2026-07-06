@@ -1,6 +1,6 @@
 //! Event handling for the TUI
 
-use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -9,6 +9,9 @@ use tokio::sync::mpsc;
 pub enum Event {
     /// Terminal key press
     Key(KeyEvent),
+
+    /// Mouse click / scroll (mouse capture is enabled)
+    Mouse(MouseEvent),
 
     /// Terminal resize
     Resize(u16, u16),
@@ -41,6 +44,13 @@ pub enum Action {
     ToggleSettings,
     ToggleLesson,
     ShowLessonMenu,
+    LessonPreviousStep,
+    LessonRestart,
+    /// Switch lesson practice between the simulated sandbox and the real
+    /// filesystem playground (~/ArcAcademy/playground)
+    TogglePracticeMode,
+    /// Wipe and re-materialize the current lesson's playground directory
+    ResetPlayground,
     ShowAchievements,
     ShowProgress,
     ShowChallenges,
@@ -50,7 +60,10 @@ pub enum Action {
 
 /// Event handler that polls for terminal events
 pub struct EventHandler {
-    sender: mpsc::UnboundedSender<Event>,
+    /// Sender handed off to the polling task on start; kept as an Option so
+    /// the channel closes (and `next()` returns None) if the polling task
+    /// ever stops
+    sender: Option<mpsc::UnboundedSender<Event>>,
     receiver: mpsc::UnboundedReceiver<Event>,
 }
 
@@ -58,34 +71,84 @@ impl EventHandler {
     /// Create a new event handler
     pub fn new() -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
-        Self { sender, receiver }
+        Self {
+            sender: Some(sender),
+            receiver,
+        }
     }
 
     /// Start the event polling loop
-    pub async fn start(&self) {
-        let sender = self.sender.clone();
+    pub async fn start(&mut self) {
+        let Some(sender) = self.sender.take() else {
+            // Already started
+            return;
+        };
 
         tokio::spawn(async move {
+            /// Give up (closing the channel so the main loop exits) after
+            /// this many consecutive terminal I/O failures
+            const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+
+            let mut consecutive_errors: u32 = 0;
+
             loop {
                 // Poll for events with a timeout
-                if event::poll(Duration::from_millis(100)).unwrap() {
-                    match event::read().unwrap() {
-                        CrosstermEvent::Key(key) => {
+                match event::poll(Duration::from_millis(100)) {
+                    Ok(true) => match event::read() {
+                        Ok(CrosstermEvent::Key(key)) => {
+                            consecutive_errors = 0;
                             if sender.send(Event::Key(key)).is_err() {
                                 break;
                             }
                         }
-                        CrosstermEvent::Resize(width, height) => {
+                        Ok(CrosstermEvent::Mouse(mouse)) => {
+                            consecutive_errors = 0;
+                            if sender.send(Event::Mouse(mouse)).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(CrosstermEvent::Resize(width, height)) => {
+                            consecutive_errors = 0;
                             if sender.send(Event::Resize(width, height)).is_err() {
                                 break;
                             }
                         }
-                        _ => {}
+                        Ok(_) => {
+                            consecutive_errors = 0;
+                        }
+                        Err(e) => {
+                            consecutive_errors += 1;
+                            tracing::warn!(
+                                "Failed to read terminal event ({}/{}): {}",
+                                consecutive_errors,
+                                MAX_CONSECUTIVE_ERRORS,
+                                e
+                            );
+                            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                tracing::error!("Too many terminal read failures, stopping event loop");
+                                break;
+                            }
+                        }
+                    },
+                    Ok(false) => {
+                        consecutive_errors = 0;
+                        // Send tick event
+                        if sender.send(Event::Tick).is_err() {
+                            break;
+                        }
                     }
-                } else {
-                    // Send tick event
-                    if sender.send(Event::Tick).is_err() {
-                        break;
+                    Err(e) => {
+                        consecutive_errors += 1;
+                        tracing::warn!(
+                            "Failed to poll terminal events ({}/{}): {}",
+                            consecutive_errors,
+                            MAX_CONSECUTIVE_ERRORS,
+                            e
+                        );
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            tracing::error!("Too many terminal poll failures, stopping event loop");
+                            break;
+                        }
                     }
                 }
             }
@@ -139,6 +202,10 @@ pub fn key_to_action(key: KeyEvent) -> Action {
         (KeyCode::Char('s'), KeyModifiers::CONTROL) => Action::ToggleSettings,
         (KeyCode::Char('l'), KeyModifiers::CONTROL) => Action::ToggleLesson,
         (KeyCode::Char('m'), KeyModifiers::NONE) => Action::ShowLessonMenu,
+
+        // Lesson step navigation (Alt modifier so plain typing is unaffected)
+        (KeyCode::Left, KeyModifiers::ALT) => Action::LessonPreviousStep,
+        (KeyCode::Char('r'), KeyModifiers::ALT) => Action::LessonRestart,
 
         // Gamification panels (Alt modifier to avoid conflicts with typing)
         (KeyCode::Char('a'), KeyModifiers::ALT) => Action::ShowAchievements,

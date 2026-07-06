@@ -1,12 +1,17 @@
 //! Progress dashboard panel for displaying user statistics
+//!
+//! Visual-first: gauges for per-difficulty completion and XP-to-next-level,
+//! plus a 14-day streak calendar strip.
 
 use crate::icons;
+use crate::level;
 use crate::theme::Theme;
-use arct_core::{UserStats, Difficulty};
+use arct_core::{Difficulty, LessonLibrary, UserStats};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Gauge, Paragraph},
     Frame,
 };
 
@@ -18,9 +23,19 @@ impl ProgressPanel {
         Self
     }
 
-    /// Render the progress dashboard overlay (centered popup)
-    pub fn render(&self, frame: &mut Frame, theme: &Theme, stats: &UserStats) {
-        let area = Self::centered_rect(70, 60, frame.size());
+    /// Render the progress dashboard overlay (centered popup).
+    ///
+    /// `activity` is one entry per day for the last 14 days (oldest first),
+    /// `true` when the user ran at least one command that day.
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        theme: &Theme,
+        stats: &UserStats,
+        library: &LessonLibrary,
+        activity: Option<&[bool]>,
+    ) {
+        let area = Self::centered_rect(70, 70, frame.size());
 
         // Clear the background
         frame.render_widget(Clear, area);
@@ -30,7 +45,7 @@ impl ProgressPanel {
             .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
             .border_style(theme.style_border_focused())
-            .style(theme.style_block());  // Set background for light themes
+            .style(theme.style_block()); // Set background for light themes
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -39,185 +54,224 @@ impl ProgressPanel {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(8),  // Overview stats
-                Constraint::Length(10), // Progress bars by difficulty
-                Constraint::Min(3),     // Commands section
-                Constraint::Length(2),  // Controls help
+                Constraint::Length(5), // Overview stats
+                Constraint::Length(3), // XP / level gauge
+                Constraint::Length(8), // Per-difficulty gauges
+                Constraint::Length(4), // Streak calendar strip
+                Constraint::Min(1),    // Spacer
+                Constraint::Length(1), // Controls help
             ])
             .split(inner);
 
-        // Overview stats
-        let overview_items = vec![
-            ListItem::new(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("", theme.style_accent()),
-                Span::raw("  Current Streak: "),
-                Span::styled(
-                    format!("{} days", stats.current_streak),
-                    theme.style_accent().add_modifier(ratatui::style::Modifier::BOLD),
-                ),
-                Span::raw("  (Best: "),
-                Span::styled(
-                    format!("{}", stats.longest_streak),
-                    theme.style_dim(),
-                ),
-                Span::raw(" days)"),
-            ])),
-            ListItem::new(Line::from("")),
-            ListItem::new(Line::from(vec![
-                Span::raw("  "),
-                icons::lesson(),
-                Span::raw("  Lessons Completed: "),
-                Span::styled(
-                    format!("{}", stats.lessons_completed.len()),
-                    theme.style_accent(),
-                ),
-            ])),
-            ListItem::new(Line::from(vec![
-                Span::raw("  "),
-                icons::shell(),
-                Span::raw("  Commands Mastered: "),
-                Span::styled(
-                    format!("{}", stats.commands_used.len()),
-                    theme.style_accent(),
-                ),
-            ])),
-            ListItem::new(Line::from(vec![
-                Span::raw("  "),
-                icons::celebration(),
-                Span::raw("  Achievements Unlocked: "),
-                Span::styled(
-                    format!("{}", stats.achievements.total_unlocked()),
-                    theme.style_accent(),
-                ),
-                Span::raw(" ("),
-                Span::styled(
-                    format!("{} points", stats.achievements.total_points()),
-                    theme.style_dim(),
-                ),
-                Span::raw(")"),
-            ])),
-            ListItem::new(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(icons::TIMER, theme.style_accent()),
-                Span::raw("  Time Invested: "),
-                Span::styled(
-                    format_time(stats.total_time_seconds),
-                    theme.style_dim(),
-                ),
-            ])),
-        ];
-
-        let overview_list = List::new(overview_items);
-        frame.render_widget(overview_list, chunks[0]);
-
-        // Progress by difficulty
-        let difficulty_section = Self::render_difficulty_progress(theme, stats);
-        frame.render_widget(difficulty_section, chunks[1]);
-
-        // Commands section
-        let command_text = if stats.commands_used.is_empty() {
-            vec![
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  No commands used yet. ", theme.style_dim()),
-                    Span::styled("Start practicing to see your progress!", theme.style_normal()),
-                ]),
-            ]
-        } else {
-            let mut lines = vec![
-                Line::from(vec![
-                    Span::styled("  Most Used Commands:", theme.style_header()),
-                ]),
-                Line::from(""),
-            ];
-
-            // Show first 5 commands (alphabetically sorted)
-            let mut commands: Vec<_> = stats.commands_used.iter().collect();
-            commands.sort();
-            for cmd in commands.iter().take(5) {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    icons::shell(),
-                    Span::styled(cmd.to_string(), theme.style_accent()),
-                ]));
-            }
-
-            if commands.len() > 5 {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(
-                        format!("... and {} more", commands.len() - 5),
-                        theme.style_dim(),
-                    ),
-                ]));
-            }
-
-            lines
-        };
-
-        let commands_para = Paragraph::new(command_text);
-        frame.render_widget(commands_para, chunks[2]);
+        self.render_overview(frame, chunks[0], theme, stats);
+        self.render_level_gauge(frame, chunks[1], theme, stats);
+        self.render_difficulty_gauges(frame, chunks[2], theme, stats, library);
+        self.render_streak_strip(frame, chunks[3], theme, stats, activity);
 
         // Controls help
         let controls = Paragraph::new(vec![Line::from(vec![
             Span::styled("Esc", theme.style_accent()),
             Span::raw(" or "),
-            Span::styled("p", theme.style_accent()),
+            Span::styled("Alt+P", theme.style_accent()),
             Span::raw(" to close"),
         ])])
         .alignment(Alignment::Center);
-        frame.render_widget(controls, chunks[3]);
+        frame.render_widget(controls, chunks[5]);
     }
 
-    /// Render progress bars by difficulty level
-    fn render_difficulty_progress(theme: &Theme, stats: &UserStats) -> Paragraph<'static> {
-        // Assume 10 lessons per difficulty for now (would need lesson library to get actual count)
-        let total_per_difficulty = 10;
-
-        let difficulties = vec![
-            (Difficulty::Beginner, "Beginner"),
-            (Difficulty::Intermediate, "Intermediate"),
-            (Difficulty::Advanced, "Advanced"),
-        ];
-
-        let mut lines = vec![
+    /// Headline numbers: streak, lessons, commands, achievements, time
+    fn render_overview(&self, frame: &mut Frame, area: Rect, theme: &Theme, stats: &UserStats) {
+        let lines = vec![
+            Line::from(""),
             Line::from(vec![
-                Span::styled("  Progress by Difficulty:", theme.style_header()),
+                Span::raw("  "),
+                Span::styled("🔥 ", theme.style_warning()),
+                Span::styled(
+                    format!("{} day streak", stats.current_streak),
+                    theme.style_accent().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  (best: {} days)", stats.longest_streak),
+                    theme.style_dim(),
+                ),
+                Span::raw("    "),
+                Span::styled(icons::TIMER, theme.style_info()),
+                Span::styled(
+                    format!("  {} invested", stats.formatted_time_spent()),
+                    theme.style_secondary(),
+                ),
             ]),
             Line::from(""),
+            Line::from(vec![
+                Span::raw("  "),
+                icons::lesson(),
+                Span::styled(
+                    format!("{} lessons", stats.lessons_completed.len()),
+                    theme.style_normal(),
+                ),
+                Span::raw("    "),
+                icons::shell(),
+                Span::styled(
+                    format!("{} commands mastered", stats.commands_used.len()),
+                    theme.style_normal(),
+                ),
+                Span::raw("    "),
+                icons::celebration(),
+                Span::styled(
+                    format!(
+                        "{} achievements ({} pts)",
+                        stats.achievements.total_unlocked(),
+                        stats.achievements.total_points()
+                    ),
+                    theme.style_normal(),
+                ),
+            ]),
+        ];
+        frame.render_widget(Paragraph::new(lines), area);
+    }
+
+    /// XP-to-next-level gauge
+    fn render_level_gauge(&self, frame: &mut Frame, area: Rect, theme: &Theme, stats: &UserStats) {
+        let info = level::level_info(stats);
+        let gauge_area = Rect {
+            x: area.x + 2,
+            y: area.y,
+            width: area.width.saturating_sub(4),
+            height: area.height.min(3),
+        };
+        let gauge = Gauge::default()
+            .block(
+                Block::default()
+                    .title(format!(" Level {} ", info.level))
+                    .title_style(theme.style_accent().add_modifier(Modifier::BOLD))
+                    .borders(Borders::ALL)
+                    .border_style(theme.style_border()),
+            )
+            .gauge_style(Style::default().fg(theme.accent).bg(theme.bg_tertiary))
+            .ratio(info.progress())
+            .label(format!(
+                "{}/{} XP to level {}",
+                info.xp_into_level,
+                info.xp_for_next,
+                info.level + 1
+            ));
+        frame.render_widget(gauge, gauge_area);
+    }
+
+    /// Per-difficulty completion gauges using real lesson counts
+    fn render_difficulty_gauges(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        stats: &UserStats,
+        library: &LessonLibrary,
+    ) {
+        let title = Paragraph::new(Line::from(vec![Span::styled(
+            "  Lesson Progress",
+            theme.style_header(),
+        )]));
+        frame.render_widget(
+            title,
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1,
+            },
+        );
+
+        let counts = library.difficulty_counts();
+        let difficulties = [
+            (Difficulty::Beginner, "Beginner", theme.success),
+            (Difficulty::Intermediate, "Intermediate", theme.info),
+            (Difficulty::Advanced, "Advanced", theme.warning),
+            (Difficulty::Expert, "Expert", theme.error),
         ];
 
-        for (difficulty, name) in difficulties {
+        let mut y = area.y + 1;
+        for (difficulty, name, color) in difficulties {
+            let total = counts.get(&difficulty).copied().unwrap_or(0);
+            if total == 0 {
+                continue; // Nothing to show for empty tiers
+            }
+            if y >= area.y + area.height {
+                break;
+            }
             let completed = stats
                 .lessons_by_difficulty
                 .get(&difficulty)
                 .copied()
-                .unwrap_or(0);
+                .unwrap_or(0)
+                .min(total);
 
-            let percentage = (completed as f64 / total_per_difficulty as f64 * 100.0).min(100.0);
-            let bar_width = 30;
-            let filled = (percentage / 100.0 * bar_width as f64) as usize;
-            let empty = bar_width - filled;
+            let label_area = Rect {
+                x: area.x + 2,
+                y,
+                width: 14.min(area.width.saturating_sub(2)),
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new(Span::styled(name, Style::default().fg(color))),
+                label_area,
+            );
 
-            let bar_filled = "█".repeat(filled);
-            let bar_empty = "░".repeat(empty);
+            let gauge_area = Rect {
+                x: area.x + 17,
+                y,
+                width: area.width.saturating_sub(19),
+                height: 1,
+            };
+            if gauge_area.width > 4 {
+                let gauge = Gauge::default()
+                    .gauge_style(Style::default().fg(color).bg(theme.bg_tertiary))
+                    .ratio(completed as f64 / total as f64)
+                    .label(format!("{}/{}", completed, total));
+                frame.render_widget(gauge, gauge_area);
+            }
+            y += 1;
+        }
+    }
 
-            lines.push(Line::from(vec![
-                Span::raw("    "),
-                Span::styled(format!("{:12}", name), theme.style_normal()),
-                Span::raw("  ["),
-                Span::styled(bar_filled, theme.style_accent()),
-                Span::styled(bar_empty, theme.style_dim()),
-                Span::raw("]  "),
-                Span::styled(
-                    format!("{}/{} ({:.0}%)", completed, total_per_difficulty, percentage),
+    /// 14-day activity strip: ■ for active days, □ for quiet ones
+    fn render_streak_strip(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        stats: &UserStats,
+        activity: Option<&[bool]>,
+    ) {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(vec![Span::styled("  Last 14 Days", theme.style_header())]),
+        ];
+
+        match activity {
+            Some(days) if !days.is_empty() => {
+                let mut spans = vec![Span::raw("  ")];
+                for active in days {
+                    if *active {
+                        spans.push(Span::styled("■ ", theme.style_success()));
+                    } else {
+                        spans.push(Span::styled("□ ", theme.style_dim()));
+                    }
+                }
+                spans.push(Span::styled("← today", theme.style_dim()));
+                lines.push(Line::from(spans));
+            }
+            _ => {
+                lines.push(Line::from(vec![Span::styled(
+                    format!(
+                        "  No activity data yet — current streak: {} days",
+                        stats.current_streak
+                    ),
                     theme.style_dim(),
-                ),
-            ]));
+                )]));
+            }
         }
 
-        Paragraph::new(lines)
+        frame.render_widget(Paragraph::new(lines), area);
     }
 
     /// Helper function to create a centered rectangle
@@ -245,17 +299,5 @@ impl ProgressPanel {
 impl Default for ProgressPanel {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Format seconds into human-readable time
-fn format_time(seconds: u64) -> String {
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-
-    if hours > 0 {
-        format!("{}h {}m", hours, minutes)
-    } else {
-        format!("{}m", minutes)
     }
 }

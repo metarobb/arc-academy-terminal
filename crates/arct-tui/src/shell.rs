@@ -10,6 +10,18 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 use vte::{Params, Parser, Perform};
 
+/// Error returned when a command exceeds its timeout and is killed
+#[derive(Debug)]
+pub struct CommandTimeout(pub std::time::Duration);
+
+impl std::fmt::Display for CommandTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Command timed out after {} seconds", self.0.as_secs())
+    }
+}
+
+impl std::error::Error for CommandTimeout {}
+
 /// Shell executor using PTY (reserved for future real shell integration)
 #[allow(dead_code)]
 pub struct ShellExecutor {
@@ -97,50 +109,103 @@ impl ShellExecutor {
     }
 
     /// Execute a command asynchronously without blocking the UI
-    pub async fn execute(&mut self, command: String, env_vars: std::collections::HashMap<String, String>) -> Result<String> {
-        // Use simple tokio Command instead of PTY for now
-        // This is more reliable and won't block
-        tokio::task::spawn_blocking(move || {
-            use std::process::Command;
+    ///
+    /// The child process is killed (not abandoned) if it does not complete
+    /// within `timeout`; a `CommandTimeout` error is returned in that case.
+    ///
+    /// When `cwd` is `Some`, the command runs in that directory instead of
+    /// inheriting the process working directory (used by lesson real-practice
+    /// mode to pin execution inside the playground).
+    pub async fn execute(
+        &mut self,
+        command: String,
+        env_vars: std::collections::HashMap<String, String>,
+        timeout: std::time::Duration,
+        cwd: Option<std::path::PathBuf>,
+    ) -> Result<String> {
+        use std::process::Stdio;
+        use tokio::io::AsyncReadExt;
+        use tokio::process::Command;
 
-            // Build command with environment variables
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c")
-               .arg(&command)
-               .env("TERM", "xterm-256color");
+        // Build command with environment variables
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+           .arg(&command)
+           .env("TERM", "xterm-256color")
+           .stdin(Stdio::null())
+           .stdout(Stdio::piped())
+           .stderr(Stdio::piped())
+           // Safety net: if this future is dropped, kill the child too
+           .kill_on_drop(true);
 
-            // Add custom environment variables
-            for (key, value) in env_vars {
-                cmd.env(key, value);
+        // Pin the working directory when requested (playground practice mode)
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+
+        // Add custom environment variables
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+
+        let mut child = cmd.spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to execute command: {}", e))?;
+
+        // Drain stdout/stderr concurrently so a chatty child can't fill the
+        // pipe buffers and deadlock against wait()
+        let mut stdout_pipe = child.stdout.take();
+        let stdout_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            if let Some(ref mut pipe) = stdout_pipe {
+                let _ = pipe.read_to_end(&mut buf).await;
             }
-
-            let output = cmd.output()
-                .map_err(|e| anyhow::anyhow!("Failed to execute command: {}", e))?;
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
-            let mut result = String::new();
-            if !stdout.is_empty() {
-                // Keep ANSI codes for colored output!
-                result.push_str(&stdout);
+            buf
+        });
+        let mut stderr_pipe = child.stderr.take();
+        let stderr_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            if let Some(ref mut pipe) = stderr_pipe {
+                let _ = pipe.read_to_end(&mut buf).await;
             }
-            if !stderr.is_empty() {
-                if !result.is_empty() {
-                    result.push_str("\n");
-                }
-                result.push_str("stderr:\n");
-                result.push_str(&stderr);
-            }
+            buf
+        });
 
-            if result.is_empty() {
-                result = format!("✓ Command completed (exit code: {})", output.status.code().unwrap_or(-1));
+        let status = match tokio::time::timeout(timeout, child.wait()).await {
+            Ok(status) => status
+                .map_err(|e| anyhow::anyhow!("Failed to wait for command: {}", e))?,
+            Err(_) => {
+                // Timeout fired: explicitly kill and reap the child instead
+                // of abandoning it to run forever
+                let _ = child.kill().await;
+                stdout_task.abort();
+                stderr_task.abort();
+                return Err(CommandTimeout(timeout).into());
             }
+        };
 
-            Ok(result)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+        let stdout_buf = stdout_task.await.unwrap_or_default();
+        let stderr_buf = stderr_task.await.unwrap_or_default();
+        let stdout = String::from_utf8_lossy(&stdout_buf);
+        let stderr = String::from_utf8_lossy(&stderr_buf);
+
+        let mut result = String::new();
+        if !stdout.is_empty() {
+            // Keep ANSI codes for colored output!
+            result.push_str(&stdout);
+        }
+        if !stderr.is_empty() {
+            if !result.is_empty() {
+                result.push_str("\n");
+            }
+            result.push_str("stderr:\n");
+            result.push_str(&stderr);
+        }
+
+        if result.is_empty() {
+            result = format!("✓ Command completed (exit code: {})", status.code().unwrap_or(-1));
+        }
+
+        Ok(result)
     }
 }
 
@@ -206,5 +271,100 @@ mod tests {
         let mut executor = ShellExecutor::new().unwrap();
         let output = executor.execute_blocking("ls").unwrap();
         assert!(!output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_async_completes_within_timeout() {
+        let mut executor = ShellExecutor::new().unwrap();
+        let output = executor
+            .execute(
+                "echo 'hello async'".to_string(),
+                std::collections::HashMap::new(),
+                std::time::Duration::from_secs(5),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(output.contains("hello async"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_explicit_cwd() {
+        let mut executor = ShellExecutor::new().unwrap();
+        let dir = std::env::temp_dir()
+            .join(format!("arct-shell-cwd-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let canonical = dir.canonicalize().unwrap();
+
+        let output = executor
+            .execute(
+                "pwd".to_string(),
+                std::collections::HashMap::new(),
+                std::time::Duration::from_secs(5),
+                Some(canonical.clone()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            output.trim().ends_with(canonical.to_str().unwrap()),
+            "pwd output {output:?} should be the requested cwd"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_timeout_kills_child_process() {
+        use std::time::{Duration, Instant};
+
+        let mut executor = ShellExecutor::new().unwrap();
+
+        let pid_file = std::env::temp_dir()
+            .join(format!("arct-shell-timeout-test-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pid_file);
+
+        // `exec` makes sleep replace the sh process, so the child pid we
+        // spawned IS the sleep pid
+        let command = format!("echo $$ > '{}'; exec sleep 30", pid_file.display());
+
+        let start = Instant::now();
+        let result = executor
+            .execute(command, std::collections::HashMap::new(), Duration::from_secs(1), None)
+            .await;
+
+        // Must report the timeout and return promptly
+        let err = result.expect_err("expected timeout error");
+        assert!(
+            err.downcast_ref::<CommandTimeout>().is_some(),
+            "expected CommandTimeout, got: {err}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(10));
+
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let _ = std::fs::remove_file(&pid_file);
+
+        // Poll until the process is actually dead (`kill -0` fails once the
+        // process no longer exists; child.kill().await also reaps it, so no
+        // zombie can keep the pid alive)
+        let mut alive = true;
+        for _ in 0..40 {
+            let status = std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            if !status.success() {
+                alive = false;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!alive, "child process {pid} is still running after timeout");
     }
 }

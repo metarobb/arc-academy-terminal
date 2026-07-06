@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +28,10 @@ pub struct Config {
     /// Shell settings
     #[serde(default)]
     pub shell: ShellConfig,
+
+    /// Lesson practice settings
+    #[serde(default)]
+    pub lessons: LessonsConfig,
 
     /// Keybinding customization
     #[serde(default)]
@@ -142,6 +146,26 @@ pub struct ShellConfig {
     pub startup_commands: Vec<String>,
 }
 
+/// Lesson practice settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LessonsConfig {
+    /// Where lesson commands execute: "simulated" (safe virtual sandbox,
+    /// the default) or "real" (real shell inside ~/ArcAcademy/playground)
+    #[serde(default = "default_practice_mode")]
+    pub practice_mode: String,
+
+    /// Whether the one-time real-mode explainer has been shown
+    #[serde(default = "default_false")]
+    pub real_mode_intro_shown: bool,
+}
+
+impl LessonsConfig {
+    /// True when lesson practice runs on the real filesystem playground
+    pub fn is_real(&self) -> bool {
+        self.practice_mode == "real"
+    }
+}
+
 /// Keybinding customization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeybindingsConfig {
@@ -167,11 +191,16 @@ impl Config {
             return Ok(config);
         }
 
-        let config_str = fs::read_to_string(&config_path)
-            .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
+        Self::load_from(&config_path)
+    }
+
+    /// Load configuration from a specific path
+    pub fn load_from(path: &Path) -> Result<Self> {
+        let config_str = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
         let mut config: Config = toml::from_str(&config_str)
-            .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
 
         // Override with environment variables
         config.apply_env_overrides();
@@ -182,9 +211,13 @@ impl Config {
     /// Save configuration to disk
     pub fn save(&self) -> Result<()> {
         let config_path = get_config_file_path()?;
+        self.save_to(&config_path)
+    }
 
+    /// Save configuration to a specific path
+    pub fn save_to(&self, path: &Path) -> Result<()> {
         // Ensure config directory exists
-        if let Some(parent) = config_path.parent() {
+        if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
         }
@@ -192,8 +225,19 @@ impl Config {
         let config_str = toml::to_string_pretty(self)
             .context("Failed to serialize config")?;
 
-        fs::write(&config_path, config_str)
-            .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
+        fs::write(path, config_str)
+            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
+
+        // The config may contain secrets (ai.api_key) — restrict it to
+        // owner read/write on both create and rewrite
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .with_context(|| {
+                    format!("Failed to set permissions on config file: {}", path.display())
+                })?;
+        }
 
         Ok(())
     }
@@ -235,6 +279,7 @@ impl Default for Config {
             ai: AIConfig::default(),
             telemetry: TelemetryConfig::default(),
             shell: ShellConfig::default(),
+            lessons: LessonsConfig::default(),
             keybindings: KeybindingsConfig::default(),
         }
     }
@@ -293,6 +338,15 @@ impl Default for ShellConfig {
             environment: HashMap::new(),
             aliases: HashMap::new(),
             startup_commands: Vec::new(),
+        }
+    }
+}
+
+impl Default for LessonsConfig {
+    fn default() -> Self {
+        Self {
+            practice_mode: default_practice_mode(),
+            real_mode_intro_shown: false,
         }
     }
 }
@@ -360,6 +414,10 @@ fn default_max_tokens() -> usize {
     4096
 }
 
+fn default_practice_mode() -> String {
+    "simulated".to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -379,6 +437,24 @@ mod tests {
         assert_eq!(config.theme.default_theme, "Arc Academy Orange");
         assert!(!config.ai.enabled);
         assert!(!config.telemetry.enabled);
+    }
+
+    #[test]
+    fn test_lessons_practice_mode_defaults_to_simulated() {
+        let config = Config::default();
+        assert_eq!(config.lessons.practice_mode, "simulated");
+        assert!(!config.lessons.is_real());
+        assert!(!config.lessons.real_mode_intro_shown);
+
+        // Configs written before the [lessons] section existed still parse
+        let legacy = "[general]\nshell = \"zsh\"\n";
+        let parsed: Config = toml::from_str(legacy).unwrap();
+        assert_eq!(parsed.lessons.practice_mode, "simulated");
+
+        // And the key is settable
+        let toml_str = "[lessons]\npractice_mode = \"real\"\n";
+        let parsed: Config = toml::from_str(toml_str).unwrap();
+        assert!(parsed.lessons.is_real());
     }
 
     #[test]
@@ -404,5 +480,52 @@ mod tests {
         assert_eq!(config.general.shell, "zsh");
         assert_eq!(config.general.history_limit, 500);
         assert_eq!(config.theme.default_theme, "Arc Dark");
+    }
+
+    fn temp_config_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "arct-config-test-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        dir.join("config.toml")
+    }
+
+    #[test]
+    fn test_save_to_and_load_from_roundtrip() {
+        let path = temp_config_path("roundtrip");
+
+        let mut config = Config::default();
+        config.general.user_name = Some("tester".to_string());
+        config.save_to(&path).unwrap();
+
+        let loaded = Config::load_from(&path).unwrap();
+        assert_eq!(loaded.general.user_name.as_deref(), Some("tester"));
+    }
+
+    #[test]
+    fn test_load_from_missing_path_errors() {
+        let path = temp_config_path("missing");
+        assert!(Config::load_from(&path).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_sets_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = temp_config_path("perms");
+
+        let config = Config::default();
+        config.save_to(&path).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        // Rewriting an existing file keeps the restrictive permissions
+        config.save_to(&path).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

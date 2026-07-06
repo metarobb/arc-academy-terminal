@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# NOTE: `cargo fmt --check` is intentionally not run yet — the tree is not
+# currently rustfmt-clean. Once `cargo fmt` has been applied across the
+# workspace, add a fmt job:
+#
+#   fmt:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: dtolnay/rust-toolchain@stable
+#         with:
+#           components: rustfmt
+#       - run: cargo fmt --all --check
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Warnings are currently allowed; tighten to `-- -D warnings` once the
+      # workspace is clippy-clean
+      - name: Clippy
+        run: cargo clippy --workspace
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Test
+        run: cargo test --workspace

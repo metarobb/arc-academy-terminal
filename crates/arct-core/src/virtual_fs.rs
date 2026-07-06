@@ -89,27 +89,73 @@ impl VirtualFileSystem {
         Ok(())
     }
 
-    /// Get the real filesystem path for a virtual path
-    pub fn resolve_path(&self, virtual_path: &str) -> PathBuf {
-        if virtual_path == "~" || virtual_path == "" {
-            return self.root.join("lesson-home");
+    /// Build the absolute *virtual* path (rooted at /lesson-home) for user input,
+    /// without resolving `.` or `..` components yet.
+    fn virtual_target(&self, virtual_path: &str) -> PathBuf {
+        if virtual_path == "~" || virtual_path.is_empty() {
+            return PathBuf::from("/lesson-home");
         }
 
-        let path = PathBuf::from(virtual_path);
+        let path = Path::new(virtual_path);
 
         // If absolute path starting with /lesson-home
-        if let Ok(stripped) = path.strip_prefix("/lesson-home") {
-            return self.root.join("lesson-home").join(stripped);
+        if path.starts_with("/lesson-home") {
+            return path.to_path_buf();
         }
 
         // If absolute path starting with /
         if path.is_absolute() {
-            return self.root.join("lesson-home").join(path.strip_prefix("/").unwrap_or(&path));
+            return PathBuf::from("/lesson-home").join(path.strip_prefix("/").unwrap_or(path));
         }
 
         // Relative path - join with current dir
-        let current = self.get_current_dir_real();
-        current.join(virtual_path)
+        self.current_dir.join(path)
+    }
+
+    /// Lexically resolve `.` and `..` components of an absolute virtual path.
+    ///
+    /// This is deliberately lexical (no `fs::canonicalize`) so it works for
+    /// paths that don't exist yet (touch, mkdir). Returns an error if the
+    /// path would escape the `/lesson-home` sandbox.
+    fn normalize_virtual(path: &Path) -> Result<PathBuf> {
+        use std::path::Component;
+
+        let mut normalized = PathBuf::from("/");
+        for component in path.components() {
+            match component {
+                Component::RootDir | Component::Prefix(_) | Component::CurDir => {}
+                Component::ParentDir => {
+                    if !normalized.pop() {
+                        anyhow::bail!("path escapes lesson sandbox");
+                    }
+                }
+                Component::Normal(part) => normalized.push(part),
+            }
+        }
+
+        if !normalized.starts_with("/lesson-home") {
+            anyhow::bail!("path escapes lesson sandbox");
+        }
+
+        Ok(normalized)
+    }
+
+    /// Get the real filesystem path for a virtual path.
+    ///
+    /// All `.`/`..` components are resolved lexically and the result is
+    /// guaranteed to be contained within the sandbox root; paths that would
+    /// escape it (e.g. `../../../../etc/hostname`) return an error.
+    pub fn resolve_path(&self, virtual_path: &str) -> Result<PathBuf> {
+        let virtual_abs = Self::normalize_virtual(&self.virtual_target(virtual_path))?;
+        let relative = virtual_abs.strip_prefix("/").unwrap_or(&virtual_abs);
+        let real = self.root.join(relative);
+
+        // Defense in depth: never hand out a path outside the sandbox root.
+        if !real.starts_with(&self.root) {
+            anyhow::bail!("path escapes lesson sandbox");
+        }
+
+        Ok(real)
     }
 
     /// Get current directory (virtual path)
@@ -129,32 +175,17 @@ impl VirtualFileSystem {
 
     /// Change directory (returns new virtual path)
     pub fn change_directory(&mut self, path: &str) -> Result<String> {
-        let target = if path == "~" || path.is_empty() {
+        let target = if path == ".." && self.current_dir == Path::new("/lesson-home") {
+            // 'cd ..' at the sandbox root clamps to the root instead of escaping
             PathBuf::from("/lesson-home")
-        } else if path == ".." {
-            // Go up one level
-            if self.current_dir == PathBuf::from("/lesson-home") {
-                // Already at root
-                PathBuf::from("/lesson-home")
-            } else {
-                self.current_dir.parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| PathBuf::from("/lesson-home"))
-            }
-        } else if path.starts_with('/') {
-            // Absolute path - ensure it's under /lesson-home
-            if path.starts_with("/lesson-home") {
-                PathBuf::from(path)
-            } else {
-                PathBuf::from("/lesson-home").join(path.trim_start_matches('/'))
-            }
         } else {
-            // Relative path
-            self.current_dir.join(path)
+            // Resolve '.'/'..' lexically; errors if the path escapes the sandbox
+            Self::normalize_virtual(&self.virtual_target(path))?
         };
 
         // Verify the directory exists
-        let real_path = self.resolve_path(target.to_str().unwrap_or("/lesson-home"));
+        let relative = target.strip_prefix("/").unwrap_or(&target);
+        let real_path = self.root.join(relative);
         if !real_path.exists() {
             anyhow::bail!("Directory not found: {}", path);
         }
@@ -169,7 +200,7 @@ impl VirtualFileSystem {
     /// List directory contents
     pub fn list_directory(&self, path: Option<&str>) -> Result<Vec<DirEntry>> {
         let real_path = if let Some(p) = path {
-            self.resolve_path(p)
+            self.resolve_path(p)?
         } else {
             self.get_current_dir_real()
         };
@@ -250,7 +281,7 @@ impl VirtualFileSystem {
 
     /// Read file contents (cat command)
     pub fn read_file(&self, path: &str) -> Result<String> {
-        let real_path = self.resolve_path(path);
+        let real_path = self.resolve_path(path)?;
 
         if !real_path.exists() {
             anyhow::bail!("No such file or directory: {}", path);
@@ -266,7 +297,7 @@ impl VirtualFileSystem {
 
     /// Create directory (mkdir command)
     pub fn create_directory(&self, path: &str, parents: bool) -> Result<()> {
-        let real_path = self.resolve_path(path);
+        let real_path = self.resolve_path(path)?;
 
         if real_path.exists() {
             anyhow::bail!("File or directory already exists: {}", path);
@@ -282,7 +313,7 @@ impl VirtualFileSystem {
 
     /// Create or update file (touch command)
     pub fn touch_file(&self, path: &str) -> Result<()> {
-        let real_path = self.resolve_path(path);
+        let real_path = self.resolve_path(path)?;
 
         if real_path.exists() {
             // Update modification time
@@ -299,7 +330,7 @@ impl VirtualFileSystem {
 
     /// Remove file or directory (rm command)
     pub fn remove(&self, path: &str, recursive: bool, force: bool) -> Result<()> {
-        let real_path = self.resolve_path(path);
+        let real_path = self.resolve_path(path)?;
 
         if !real_path.exists() {
             if force {
@@ -321,8 +352,8 @@ impl VirtualFileSystem {
 
     /// Move or rename file/directory (mv command)
     pub fn move_item(&self, source: &str, destination: &str) -> Result<()> {
-        let source_path = self.resolve_path(source);
-        let dest_path = self.resolve_path(destination);
+        let source_path = self.resolve_path(source)?;
+        let dest_path = self.resolve_path(destination)?;
 
         if !source_path.exists() {
             anyhow::bail!("No such file or directory: {}", source);
@@ -341,8 +372,8 @@ impl VirtualFileSystem {
 
     /// Copy file or directory (cp command)
     pub fn copy(&self, source: &str, destination: &str, recursive: bool) -> Result<()> {
-        let source_path = self.resolve_path(source);
-        let dest_path = self.resolve_path(destination);
+        let source_path = self.resolve_path(source)?;
+        let dest_path = self.resolve_path(destination)?;
 
         if !source_path.exists() {
             anyhow::bail!("No such file or directory: {}", source);
@@ -389,9 +420,76 @@ impl VirtualFileSystem {
         Ok(())
     }
 
+    /// Search a file for lines containing `pattern` (grep command).
+    ///
+    /// Returns the matching lines as `(line_number, line)` pairs (line
+    /// numbers are 1-based). Matching is plain substring search; pass
+    /// `case_insensitive` for `-i` behavior.
+    pub fn grep_file(
+        &self,
+        pattern: &str,
+        path: &str,
+        case_insensitive: bool,
+    ) -> Result<Vec<(usize, String)>> {
+        let content = self.read_file(path)?;
+        let needle = if case_insensitive {
+            pattern.to_lowercase()
+        } else {
+            pattern.to_string()
+        };
+
+        let mut matches = Vec::new();
+        for (idx, line) in content.lines().enumerate() {
+            let haystack = if case_insensitive {
+                line.to_lowercase()
+            } else {
+                line.to_string()
+            };
+            if haystack.contains(&needle) {
+                matches.push((idx + 1, line.to_string()));
+            }
+        }
+        Ok(matches)
+    }
+
+    /// Return the first `n` lines of a file (head command)
+    pub fn head_file(&self, path: &str, n: usize) -> Result<String> {
+        let content = self.read_file(path)?;
+        let mut out = String::new();
+        for line in content.lines().take(n) {
+            out.push_str(line);
+            out.push('\n');
+        }
+        Ok(out)
+    }
+
+    /// Return the last `n` lines of a file (tail command)
+    pub fn tail_file(&self, path: &str, n: usize) -> Result<String> {
+        let content = self.read_file(path)?;
+        let lines: Vec<&str> = content.lines().collect();
+        let start = lines.len().saturating_sub(n);
+        let mut out = String::new();
+        for line in &lines[start..] {
+            out.push_str(line);
+            out.push('\n');
+        }
+        Ok(out)
+    }
+
+    /// Count lines, words and bytes of a file (wc command).
+    ///
+    /// Returns `(lines, words, bytes)`.
+    pub fn wc_file(&self, path: &str) -> Result<(usize, usize, usize)> {
+        let content = self.read_file(path)?;
+        let lines = content.lines().count();
+        let words = content.split_whitespace().count();
+        let bytes = content.len();
+        Ok((lines, words, bytes))
+    }
+
     /// Write content to file (for echo redirection, etc.)
     pub fn write_file(&self, path: &str, content: &str, append: bool) -> Result<()> {
-        let real_path = self.resolve_path(path);
+        let real_path = self.resolve_path(path)?;
 
         if append {
             use std::io::Write;
@@ -404,6 +502,22 @@ impl VirtualFileSystem {
             fs::write(&real_path, content)?;
         }
 
+        Ok(())
+    }
+
+    /// Seed lesson starter files (the lesson's `setup` list) into the
+    /// sandbox, creating parent directories as needed. Paths are resolved
+    /// through the same containment checks as every other operation, so a
+    /// malicious setup path cannot escape the sandbox.
+    pub fn seed_setup(&self, files: &[crate::lesson::SetupFile]) -> Result<()> {
+        for file in files {
+            let real = self.resolve_path(&file.path)?;
+            if let Some(parent) = real.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&real, &file.contents)
+                .with_context(|| format!("Failed to seed lesson file: {}", file.path))?;
+        }
         Ok(())
     }
 
@@ -474,5 +588,148 @@ mod tests {
 
         // Directories should be first
         assert!(entries[0].is_dir || entries[0].name == ".bashrc");
+    }
+
+    fn assert_escape_err<T: std::fmt::Debug>(result: Result<T>) {
+        let err = result.expect_err("operation should have been rejected");
+        assert!(
+            err.to_string().contains("escapes lesson sandbox"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_cat_traversal_escape_rejected() {
+        let vfs = VirtualFileSystem::new("test", "session-cat-escape").unwrap();
+        assert_escape_err(vfs.read_file("../../../../etc/hostname"));
+        assert_escape_err(vfs.read_file("/lesson-home/../../etc/hostname"));
+    }
+
+    #[test]
+    fn test_rm_traversal_escape_rejected() {
+        let vfs = VirtualFileSystem::new("test", "session-rm-escape").unwrap();
+        // Even with recursive + force, escaping paths must error, not silently pass
+        assert_escape_err(vfs.remove("../../..", true, true));
+        assert_escape_err(vfs.remove("../outside.txt", false, false));
+    }
+
+    #[test]
+    fn test_cd_traversal_escape_rejected() {
+        let mut vfs = VirtualFileSystem::new("test", "session-cd-escape").unwrap();
+        assert_escape_err(vfs.change_directory("../.."));
+        assert_escape_err(vfs.change_directory("Documents/../../.."));
+
+        // Current directory must be unchanged after rejected attempts
+        assert_eq!(vfs.get_current_dir(), Path::new("/lesson-home"));
+    }
+
+    #[test]
+    fn test_mv_traversal_escape_rejected() {
+        let vfs = VirtualFileSystem::new("test", "session-mv-escape").unwrap();
+        assert_escape_err(vfs.move_item("Documents/report.txt", "../../stolen.txt"));
+        assert_escape_err(vfs.move_item("../../../etc/hostname", "here.txt"));
+    }
+
+    #[test]
+    fn test_cp_traversal_escape_rejected() {
+        let vfs = VirtualFileSystem::new("test", "session-cp-escape").unwrap();
+        assert_escape_err(vfs.copy("Documents/report.txt", "../../stolen.txt", false));
+        assert_escape_err(vfs.copy("../../../etc/hostname", "here.txt", false));
+    }
+
+    #[test]
+    fn test_mkdir_touch_write_traversal_escape_rejected() {
+        let vfs = VirtualFileSystem::new("test", "session-mk-escape").unwrap();
+        assert_escape_err(vfs.create_directory("../evil-dir", true));
+        assert_escape_err(vfs.touch_file("../evil.txt"));
+        assert_escape_err(vfs.write_file("../evil.txt", "payload", false));
+        assert_escape_err(vfs.list_directory(Some("../..")));
+    }
+
+    #[test]
+    fn test_cd_dotdot_at_root_clamps() {
+        let mut vfs = VirtualFileSystem::new("test", "session-cd-root").unwrap();
+
+        // 'cd ..' at the sandbox root stays at the root (does not escape)
+        let path = vfs.change_directory("..").unwrap();
+        assert_eq!(path, "/lesson-home");
+        assert_eq!(vfs.get_current_dir(), Path::new("/lesson-home"));
+    }
+
+    #[test]
+    fn test_grep_file() {
+        let vfs = VirtualFileSystem::new("test", "session-grep").unwrap();
+        vfs.write_file("log.txt", "ok line\nERROR one\nfine\nerror two\n", false)
+            .unwrap();
+
+        // Case-sensitive: only the lowercase match
+        let matches = vfs.grep_file("error", "log.txt", false).unwrap();
+        assert_eq!(matches, vec![(4, "error two".to_string())]);
+
+        // Case-insensitive (-i): both matches, with 1-based line numbers
+        let matches = vfs.grep_file("error", "log.txt", true).unwrap();
+        assert_eq!(
+            matches,
+            vec![(2, "ERROR one".to_string()), (4, "error two".to_string())]
+        );
+
+        // grep must not escape the sandbox
+        assert_escape_err(vfs.grep_file("root", "../../../../etc/passwd", false));
+    }
+
+    #[test]
+    fn test_head_and_tail_file() {
+        let vfs = VirtualFileSystem::new("test", "session-headtail").unwrap();
+        let body = (1..=20).map(|i| format!("line{}\n", i)).collect::<String>();
+        vfs.write_file("nums.txt", &body, false).unwrap();
+
+        let head = vfs.head_file("nums.txt", 3).unwrap();
+        assert_eq!(head, "line1\nline2\nline3\n");
+
+        let tail = vfs.tail_file("nums.txt", 2).unwrap();
+        assert_eq!(tail, "line19\nline20\n");
+
+        // Requesting more lines than exist returns the whole file
+        let all = vfs.head_file("nums.txt", 100).unwrap();
+        assert_eq!(all.lines().count(), 20);
+        let all = vfs.tail_file("nums.txt", 100).unwrap();
+        assert_eq!(all.lines().count(), 20);
+    }
+
+    #[test]
+    fn test_wc_file() {
+        let vfs = VirtualFileSystem::new("test", "session-wc").unwrap();
+        vfs.write_file("data.txt", "one two\nthree\n", false).unwrap();
+
+        let (lines, words, bytes) = vfs.wc_file("data.txt").unwrap();
+        assert_eq!(lines, 2);
+        assert_eq!(words, 3);
+        assert_eq!(bytes, 14);
+    }
+
+    #[test]
+    fn test_legitimate_relative_paths_still_work() {
+        let mut vfs = VirtualFileSystem::new("test", "session-legit").unwrap();
+
+        // Dotted paths that stay inside the sandbox are fine
+        let content = vfs.read_file("Documents/../Documents/report.txt").unwrap();
+        assert!(content.contains("Quarterly Report"));
+
+        // cd into a nested dir, then navigate with ..
+        vfs.change_directory("Pictures/family").unwrap();
+        let path = vfs.change_directory("..").unwrap();
+        assert_eq!(path, "/lesson-home/Pictures");
+
+        // Relative operations from a subdirectory work and stay contained
+        vfs.create_directory("holiday", false).unwrap();
+        vfs.touch_file("holiday/list.txt").unwrap();
+        vfs.copy("family/../vacation.jpg", "holiday/copy.jpg", false).unwrap();
+        vfs.move_item("holiday/copy.jpg", "holiday/moved.jpg").unwrap();
+        assert!(vfs.resolve_path("holiday/moved.jpg").unwrap().exists());
+
+        // Absolute virtual paths resolve inside the sandbox root
+        let resolved = vfs.resolve_path("/lesson-home/Documents").unwrap();
+        assert!(resolved.starts_with(&vfs.root));
     }
 }

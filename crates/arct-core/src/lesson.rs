@@ -7,6 +7,48 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A complete lesson module (e.g., "Navigation Basics")
+///
+/// # TOML lesson-pack format
+///
+/// Lessons can be authored as `*.toml` files (loaded from
+/// `~/.config/arct/lessons/` via [`LessonLibrary::load_from_dir`]). The
+/// top-level fields map 1:1 onto this struct:
+///
+/// ```toml
+/// id = "my-lesson"
+/// title = "My Lesson"
+/// description = "What this lesson teaches."
+/// difficulty = "Beginner"          # Beginner | Intermediate | Advanced | Expert
+/// estimated_minutes = 10
+/// prerequisites = ["nav-basics"]   # lesson ids to complete first
+/// tags = ["beginner", "files"]
+///
+/// # Optional starter files, materialized into the practice environment
+/// # before the lesson starts (omit entirely if the lesson needs none).
+/// # In simulated mode they are seeded into the virtual sandbox filesystem;
+/// # in real practice mode they are written under
+/// # ~/ArcAcademy/playground/<lesson-id>/ and the session cd's there.
+/// # `path` is relative to the lesson's practice directory (subdirectories
+/// # are created as needed; absolute paths and `..` are rejected).
+/// [[setup]]
+/// path = "notes.txt"
+/// contents = "starter content\n"
+///
+/// [[setup]]
+/// path = "logs/server.log"
+/// contents = "line 1\nline 2\n"
+///
+/// [[steps]]
+/// step_number = 1
+/// title = "First step"
+/// instruction = "Type the command..."
+/// hint = "Try 'pwd'"
+///
+/// [steps.step_type.CommandExercise]
+/// expected_command = "pwd"
+/// validation = "CommandOnly"
+/// success_message = "Nice!"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lesson {
     pub id: String,
@@ -17,6 +59,36 @@ pub struct Lesson {
     pub steps: Vec<LessonStep>,
     pub prerequisites: Vec<String>, // IDs of lessons that should be completed first
     pub tags: Vec<String>,          // e.g., ["beginner", "navigation", "essential"]
+    /// Optional starter files for the lesson's practice environment.
+    ///
+    /// Defaults to empty, so existing lesson-pack TOML files without a
+    /// `setup` array keep parsing unchanged.
+    #[serde(default)]
+    pub setup: Vec<SetupFile>,
+}
+
+/// A starter file materialized into a lesson's practice environment.
+///
+/// In TOML lesson packs this is an entry in the `[[setup]]` array with a
+/// relative `path` and the literal file `contents`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupFile {
+    /// Path relative to the lesson's practice directory (no `..`, not absolute).
+    pub path: String,
+    /// Full file contents to write.
+    pub contents: String,
+}
+
+impl Lesson {
+    /// Serialize this lesson to a TOML document (the on-disk lesson format).
+    pub fn to_toml(&self) -> anyhow::Result<String> {
+        Ok(toml::to_string_pretty(self)?)
+    }
+
+    /// Parse a lesson from a TOML document.
+    pub fn from_toml(content: &str) -> anyhow::Result<Self> {
+        Ok(toml::from_str(content)?)
+    }
 }
 
 /// Difficulty level of a lesson
@@ -153,6 +225,7 @@ impl LessonProgress {
 }
 
 /// Lesson library that stores all available lessons
+#[derive(Debug, Clone)]
 pub struct LessonLibrary {
     lessons: HashMap<String, Lesson>,
 }
@@ -195,6 +268,50 @@ impl LessonLibrary {
             .values()
             .filter(|l| l.tags.iter().any(|t| t == tag))
             .collect()
+    }
+
+    /// Count lessons per difficulty level (used for achievement unlock checks)
+    pub fn difficulty_counts(&self) -> HashMap<Difficulty, usize> {
+        let mut counts = HashMap::new();
+        for lesson in self.lessons.values() {
+            *counts.entry(lesson.difficulty).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// Load user-provided `*.toml` lesson files from a directory and merge
+    /// them with the built-in lessons. User lessons override built-ins with
+    /// the same id. Returns the number of lessons loaded.
+    ///
+    /// A missing directory is not an error (returns 0); an unreadable or
+    /// unparsable lesson file is.
+    pub fn load_from_dir(&mut self, path: &std::path::Path) -> anyhow::Result<usize> {
+        use anyhow::Context;
+
+        if !path.is_dir() {
+            return Ok(0);
+        }
+
+        let mut loaded = 0;
+        for entry in std::fs::read_dir(path)
+            .with_context(|| format!("Failed to read lesson directory: {}", path.display()))?
+        {
+            let entry = entry?;
+            let file_path = entry.path();
+            if file_path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+
+            let content = std::fs::read_to_string(&file_path)
+                .with_context(|| format!("Failed to read lesson file: {}", file_path.display()))?;
+            let lesson = Lesson::from_toml(&content)
+                .with_context(|| format!("Failed to parse lesson file: {}", file_path.display()))?;
+
+            self.register(lesson);
+            loaded += 1;
+        }
+
+        Ok(loaded)
     }
 
     /// Load default lessons (initial set)
@@ -284,10 +401,97 @@ impl LessonValidator {
                     hint: Some(format!("Expected one of: {}", commands.join(" OR "))),
                 }
             }
-            _ => ValidationResult::Success {
-                message: "Validation passed (stub)".to_string(),
+            CommandValidation::CommandAndFlags => {
+                let (user_cmd, user_flags, user_args) = Self::split_command(user_input);
+                let (expected_cmd, expected_flags, expected_args) = Self::split_command(expected);
+
+                if user_cmd.is_empty() {
+                    return ValidationResult::Failure {
+                        message: "No command entered.".to_string(),
+                        hint: Some(format!("Try: {}", expected)),
+                    };
+                }
+
+                if user_cmd != expected_cmd {
+                    return ValidationResult::Failure {
+                        message: format!("Wrong command. Expected: {}", expected_cmd),
+                        hint: Some("Check which program you're running.".to_string()),
+                    };
+                }
+
+                if user_flags != expected_flags {
+                    let expected_list: Vec<String> = expected_flags.iter().cloned().collect();
+                    return ValidationResult::Failure {
+                        message: "The flags don't match.".to_string(),
+                        hint: Some(if expected_list.is_empty() {
+                            "This command doesn't need any flags.".to_string()
+                        } else {
+                            format!("Expected flags: {}", expected_list.join(" "))
+                        }),
+                    };
+                }
+
+                if user_args != expected_args {
+                    return ValidationResult::Failure {
+                        message: "The arguments don't match.".to_string(),
+                        hint: Some(format!("Expected: {}", expected)),
+                    };
+                }
+
+                ValidationResult::Success {
+                    message: "Correct command, flags, and arguments!".to_string(),
+                }
+            }
+            CommandValidation::Regex(pattern) => match regex::Regex::new(pattern) {
+                Ok(re) => {
+                    if re.is_match(user_input.trim()) {
+                        ValidationResult::Success {
+                            message: "Correct!".to_string(),
+                        }
+                    } else {
+                        ValidationResult::Failure {
+                            message: "That command doesn't match what's expected.".to_string(),
+                            hint: None,
+                        }
+                    }
+                }
+                Err(e) => ValidationResult::Failure {
+                    message: format!("Invalid validation pattern in lesson data: {}", e),
+                    hint: None,
+                },
             },
         }
+    }
+
+    /// Split a command line into (program, flag set, positional args).
+    ///
+    /// Combined short flags are expanded so `-la`, `-al`, and `-l -a` all
+    /// produce the flag set {"-l", "-a"}. Long flags (`--foo`) are kept whole.
+    /// Flag comparison is order-insensitive; positional args keep their order.
+    fn split_command(input: &str) -> (String, std::collections::BTreeSet<String>, Vec<String>) {
+        let tokens = shellwords::split(input.trim())
+            .unwrap_or_else(|_| input.split_whitespace().map(String::from).collect());
+
+        let mut iter = tokens.into_iter();
+        let program = iter.next().unwrap_or_default();
+
+        let mut flags = std::collections::BTreeSet::new();
+        let mut args = Vec::new();
+
+        for token in iter {
+            if token.starts_with("--") && token.len() > 2 {
+                flags.insert(token);
+            } else if token.starts_with('-') && token.len() > 1 {
+                // Expand combined short flags: -la -> -l, -a
+                for ch in token.chars().skip(1) {
+                    flags.insert(format!("-{}", ch));
+                }
+            } else {
+                args.push(token);
+            }
+        }
+
+        (program, flags, args)
     }
 
     /// Validate a multiple choice answer
@@ -339,6 +543,16 @@ fn create_navigation_basics_lesson() -> Lesson {
         estimated_minutes: 10,
         prerequisites: vec![],
         tags: vec!["beginner".to_string(), "navigation".to_string(), "essential".to_string()],
+        setup: vec![
+            SetupFile {
+                path: "README.txt".to_string(),
+                contents: "Welcome to your practice space!\n\nUse pwd, ls, and cd to look around. There's a 'docs' folder to explore.\n".to_string(),
+            },
+            SetupFile {
+                path: "docs/getting-started.txt".to_string(),
+                contents: "You found the docs folder — nice navigating!\nTry 'cd ..' to go back up.\n".to_string(),
+            },
+        ],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -453,6 +667,12 @@ fn create_file_management_lesson() -> Lesson {
         estimated_minutes: 15,
         prerequisites: vec!["nav-basics".to_string()],
         tags: vec!["beginner".to_string(), "files".to_string(), "essential".to_string()],
+        setup: vec![
+            SetupFile {
+                path: "README.txt".to_string(),
+                contents: "This is your file-management practice space.\n\nYou'll create a 'practice' directory here and work with files inside it.\nNothing outside this folder is ever touched.\n".to_string(),
+            },
+        ],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -549,6 +769,7 @@ fn create_safety_lesson() -> Lesson {
         estimated_minutes: 15,
         prerequisites: vec![],
         tags: vec!["beginner".to_string(), "safety".to_string(), "essential".to_string(), "security".to_string()],
+        setup: vec![],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -704,6 +925,39 @@ fn create_file_viewing_lesson() -> Lesson {
         estimated_minutes: 12,
         prerequisites: vec!["nav-basics".to_string()],
         tags: vec!["beginner".to_string(), "files".to_string(), "text".to_string()],
+        setup: vec![
+            SetupFile {
+                path: "notes.txt".to_string(),
+                contents: "Shopping list:\n- apples\n- bread\n- coffee\n\nReminder: practice cat, less, head, tail and grep on the files here.\n".to_string(),
+            },
+            SetupFile {
+                path: "server.log".to_string(),
+                contents: "2026-07-01 09:00:01 INFO  http server started on port 8080\n\
+2026-07-01 09:00:02 INFO  ssh daemon listening on port 22\n\
+2026-07-01 09:01:14 INFO  http GET /index.html 200\n\
+2026-07-01 09:02:33 WARN  http GET /admin 403\n\
+2026-07-01 09:03:05 INFO  SSH login accepted for user alice\n\
+2026-07-01 09:04:41 ERROR http GET /missing 404\n\
+2026-07-01 09:05:12 INFO  http GET /about.html 200\n\
+2026-07-01 09:06:58 WARN  disk usage at 81%\n\
+2026-07-01 09:07:23 INFO  http POST /contact 200\n\
+2026-07-01 09:08:44 ERROR ssh login failed for user bob\n\
+2026-07-01 09:09:31 INFO  http GET /index.html 200\n\
+2026-07-01 09:10:02 INFO  backup job started\n\
+2026-07-01 09:12:19 INFO  backup job finished\n\
+2026-07-01 09:13:37 INFO  http GET /docs 200\n\
+2026-07-01 09:14:55 ERROR http GET /broken 500\n\
+2026-07-01 09:15:10 INFO  SSH session closed for user alice\n\
+2026-07-01 09:16:42 INFO  http GET /index.html 200\n\
+2026-07-01 09:17:08 WARN  slow query took 4.2s\n\
+2026-07-01 09:18:29 INFO  http GET /blog 200\n\
+2026-07-01 09:19:59 INFO  server heartbeat OK\n".to_string(),
+            },
+            SetupFile {
+                path: "poem.txt".to_string(),
+                contents: "The terminal glows in quiet night,\nEach command a spark of light.\nWith cat and grep the text takes flight,\nAnd tail reveals the end in sight.\n".to_string(),
+            },
+        ],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -854,6 +1108,7 @@ fn create_permissions_lesson() -> Lesson {
         estimated_minutes: 15,
         prerequisites: vec!["nav-basics".to_string(), "file-mgmt".to_string()],
         tags: vec!["intermediate".to_string(), "permissions".to_string(), "security".to_string()],
+        setup: vec![],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -1018,6 +1273,7 @@ fn create_process_management_lesson() -> Lesson {
         estimated_minutes: 15,
         prerequisites: vec!["nav-basics".to_string()],
         tags: vec!["intermediate".to_string(), "processes".to_string(), "system".to_string()],
+        setup: vec![],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -1165,6 +1421,31 @@ fn create_text_processing_lesson() -> Lesson {
         estimated_minutes: 20,
         prerequisites: vec!["file-viewing".to_string()],
         tags: vec!["intermediate".to_string(), "text".to_string(), "pipes".to_string()],
+        setup: vec![
+            SetupFile {
+                path: "access.log".to_string(),
+                contents: "192.168.1.10 - GET /index.html 200\n\
+192.168.1.22 - GET /about.html 200\n\
+192.168.1.10 - GET /docs 200\n\
+10.0.0.5 - POST /login 401 ERROR bad password\n\
+192.168.1.10 - GET /blog 200\n\
+192.168.1.22 - GET /missing 404 ERROR not found\n\
+10.0.0.5 - POST /login 200\n\
+172.16.4.8 - GET /index.html 200\n\
+192.168.1.10 - GET /contact 200\n\
+172.16.4.8 - GET /broken 500 ERROR server fault\n\
+192.168.1.22 - GET /index.html 200\n\
+10.0.0.5 - GET /profile 200\n".to_string(),
+            },
+            SetupFile {
+                path: "fruits.txt".to_string(),
+                contents: "banana\napple\ncherry\napple\nbanana\napple\ndate\ncherry\n".to_string(),
+            },
+            SetupFile {
+                path: "scores.txt".to_string(),
+                contents: "alice:87\nbob:62\ncarol:95\ndave:78\nerin:95\n".to_string(),
+            },
+        ],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -1341,6 +1622,7 @@ fn create_package_management_lesson() -> Lesson {
         estimated_minutes: 12,
         prerequisites: vec!["nav-basics".to_string()],
         tags: vec!["beginner".to_string(), "packages".to_string(), "system".to_string()],
+        setup: vec![],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -1480,6 +1762,7 @@ fn create_network_basics_lesson() -> Lesson {
         estimated_minutes: 12,
         prerequisites: vec!["nav-basics".to_string()],
         tags: vec!["beginner".to_string(), "network".to_string(), "internet".to_string()],
+        setup: vec![],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -1623,6 +1906,7 @@ fn create_git_fundamentals_lesson() -> Lesson {
         estimated_minutes: 15,
         prerequisites: vec!["nav-basics".to_string(), "file-mgmt".to_string()],
         tags: vec!["beginner".to_string(), "git".to_string(), "version-control".to_string()],
+        setup: vec![],
         steps: vec![
             LessonStep {
                 step_number: 1,
@@ -1824,5 +2108,216 @@ mod tests {
             &CommandValidation::CommandOnly,
         );
         assert!(result.is_success());
+
+        // Wrong command
+        let result = validator.validate_command("cd /home", "ls", &CommandValidation::CommandOnly);
+        assert!(!result.is_success());
+
+        // Empty input
+        let result = validator.validate_command("", "ls", &CommandValidation::CommandOnly);
+        assert!(!result.is_success());
+    }
+
+    #[test]
+    fn test_command_validation_exact_negative() {
+        let validator = LessonValidator::new();
+        let validation = CommandValidation::Exact;
+
+        // Wrong command
+        assert!(!validator.validate_command("pwd", "ls -la", &validation).is_success());
+        // Wrong flags
+        assert!(!validator.validate_command("ls -l", "ls -la", &validation).is_success());
+        // Empty input
+        assert!(!validator.validate_command("", "ls -la", &validation).is_success());
+    }
+
+    #[test]
+    fn test_command_validation_command_and_flags() {
+        let validator = LessonValidator::new();
+        let validation = CommandValidation::CommandAndFlags;
+
+        // Exact match
+        assert!(validator
+            .validate_command("ls -la /home", "ls -la /home", &validation)
+            .is_success());
+
+        // Flags are order-insensitive and combined short flags expand:
+        // -la == -al == -l -a
+        assert!(validator
+            .validate_command("ls -al /home", "ls -la /home", &validation)
+            .is_success());
+        assert!(validator
+            .validate_command("ls -l -a /home", "ls -la /home", &validation)
+            .is_success());
+        assert!(validator
+            .validate_command("ls -a -l /home", "ls -l -a /home", &validation)
+            .is_success());
+
+        // Wrong command
+        assert!(!validator
+            .validate_command("dir -la /home", "ls -la /home", &validation)
+            .is_success());
+
+        // Wrong flags (missing / extra)
+        assert!(!validator
+            .validate_command("ls -l /home", "ls -la /home", &validation)
+            .is_success());
+        assert!(!validator
+            .validate_command("ls -lah /home", "ls -la /home", &validation)
+            .is_success());
+
+        // Wrong positional args
+        assert!(!validator
+            .validate_command("ls -la /tmp", "ls -la /home", &validation)
+            .is_success());
+
+        // Empty input
+        assert!(!validator.validate_command("", "ls -la /home", &validation).is_success());
+    }
+
+    #[test]
+    fn test_command_validation_regex() {
+        let validator = LessonValidator::new();
+        let validation = CommandValidation::Regex("ps.*8080|lsof.*8080".to_string());
+
+        // Matching input
+        assert!(validator
+            .validate_command("ps aux | grep 8080", "", &validation)
+            .is_success());
+        assert!(validator
+            .validate_command("lsof -i :8080", "", &validation)
+            .is_success());
+
+        // Wrong command
+        assert!(!validator.validate_command("ls -la", "", &validation).is_success());
+        // Empty input
+        assert!(!validator.validate_command("", "", &validation).is_success());
+
+        // Invalid pattern must fail, not silently pass
+        let bad = CommandValidation::Regex("(unclosed".to_string());
+        assert!(!validator.validate_command("anything", "", &bad).is_success());
+    }
+
+    #[test]
+    fn test_command_validation_any_of_negative() {
+        let validator = LessonValidator::new();
+        let validation = CommandValidation::AnyOf(vec!["cd".to_string(), "cd ~".to_string()]);
+
+        assert!(validator.validate_command("cd ~", "cd", &validation).is_success());
+        // Wrong command
+        assert!(!validator.validate_command("pwd", "cd", &validation).is_success());
+        // Wrong flags/args
+        assert!(!validator.validate_command("cd /tmp", "cd", &validation).is_success());
+        // Empty input
+        assert!(!validator.validate_command("", "cd", &validation).is_success());
+    }
+
+    #[test]
+    fn test_lesson_toml_round_trip() {
+        let lesson = create_navigation_basics_lesson();
+
+        let toml_text = lesson.to_toml().expect("Lesson should serialize to TOML");
+        let restored = Lesson::from_toml(&toml_text).expect("TOML should parse back to Lesson");
+
+        assert_eq!(restored.id, lesson.id);
+        assert_eq!(restored.title, lesson.title);
+        assert_eq!(restored.difficulty, lesson.difficulty);
+        assert_eq!(restored.steps.len(), lesson.steps.len());
+        assert_eq!(restored.prerequisites, lesson.prerequisites);
+        assert_eq!(restored.tags, lesson.tags);
+        assert_eq!(restored.setup, lesson.setup);
+    }
+
+    #[test]
+    fn test_lesson_toml_without_setup_still_parses() {
+        // Backward compat: lesson-pack TOML written before the `setup` field
+        // existed must keep parsing (setup defaults to empty)
+        let mut lesson = create_navigation_basics_lesson();
+        lesson.setup.clear();
+        let toml_text = lesson.to_toml().unwrap();
+        assert!(
+            !toml_text.contains("[[setup]]"),
+            "empty setup should not serialize an array"
+        );
+
+        let restored = Lesson::from_toml(&toml_text).expect("legacy TOML should parse");
+        assert!(restored.setup.is_empty());
+    }
+
+    #[test]
+    fn test_lesson_toml_setup_round_trip() {
+        let mut lesson = create_navigation_basics_lesson();
+        lesson.setup = vec![SetupFile {
+            path: "data/sample.txt".to_string(),
+            contents: "hello\nworld\n".to_string(),
+        }];
+
+        let toml_text = lesson.to_toml().unwrap();
+        assert!(toml_text.contains("[[setup]]"));
+
+        let restored = Lesson::from_toml(&toml_text).unwrap();
+        assert_eq!(restored.setup.len(), 1);
+        assert_eq!(restored.setup[0].path, "data/sample.txt");
+        assert_eq!(restored.setup[0].contents, "hello\nworld\n");
+    }
+
+    #[test]
+    fn test_builtin_lessons_have_starter_files_where_needed() {
+        let library = LessonLibrary::new();
+        for id in ["file-viewing", "file-mgmt", "text-processing"] {
+            let lesson = library.get(id).expect("built-in lesson should exist");
+            assert!(
+                !lesson.setup.is_empty(),
+                "lesson '{}' should ship starter files",
+                id
+            );
+            for file in &lesson.setup {
+                assert!(!file.path.starts_with('/'), "setup path must be relative");
+                assert!(!file.path.contains(".."), "setup path must not contain ..");
+                assert!(!file.contents.is_empty(), "setup contents must not be empty");
+            }
+        }
+    }
+
+    #[test]
+    fn test_library_load_from_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "arct-lesson-dir-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Write an example user lesson that overrides a built-in by id
+        let mut custom = create_navigation_basics_lesson();
+        custom.title = "Navigation Basics (User Override)".to_string();
+        std::fs::write(dir.join("nav-basics.toml"), custom.to_toml().unwrap()).unwrap();
+
+        // And a brand-new user lesson
+        let mut extra = create_navigation_basics_lesson();
+        extra.id = "user-extra".to_string();
+        extra.title = "User Extra Lesson".to_string();
+        std::fs::write(dir.join("user-extra.toml"), extra.to_toml().unwrap()).unwrap();
+
+        // Non-TOML files are ignored
+        std::fs::write(dir.join("notes.txt"), "not a lesson").unwrap();
+
+        let mut library = LessonLibrary::new();
+        let builtin_count = library.all().len();
+        let loaded = library.load_from_dir(&dir).expect("load_from_dir should succeed");
+
+        assert_eq!(loaded, 2);
+        // Override replaces, new lesson adds
+        assert_eq!(library.all().len(), builtin_count + 1);
+        assert_eq!(
+            library.get("nav-basics").unwrap().title,
+            "Navigation Basics (User Override)"
+        );
+        assert_eq!(library.get("user-extra").unwrap().title, "User Extra Lesson");
+
+        // Missing directory is not an error
+        let mut fresh = LessonLibrary::new();
+        assert_eq!(fresh.load_from_dir(&dir.join("does-not-exist")).unwrap(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

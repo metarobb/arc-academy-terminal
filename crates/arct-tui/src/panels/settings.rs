@@ -16,6 +16,7 @@ pub enum SettingField {
     UserName,
     AIEnabled,
     AIProvider,
+    PracticeMode,
     Theme,
 }
 
@@ -25,7 +26,8 @@ impl SettingField {
         match self {
             Self::UserName => Self::AIEnabled,
             Self::AIEnabled => Self::AIProvider,
-            Self::AIProvider => Self::Theme,
+            Self::AIProvider => Self::PracticeMode,
+            Self::PracticeMode => Self::Theme,
             Self::Theme => Self::UserName,
         }
     }
@@ -36,7 +38,8 @@ impl SettingField {
             Self::UserName => Self::Theme,
             Self::AIEnabled => Self::UserName,
             Self::AIProvider => Self::AIEnabled,
-            Self::Theme => Self::AIProvider,
+            Self::PracticeMode => Self::AIProvider,
+            Self::Theme => Self::PracticeMode,
         }
     }
 
@@ -46,6 +49,7 @@ impl SettingField {
             Self::UserName => "Name",
             Self::AIEnabled => "AI Assistant",
             Self::AIProvider => "AI Provider",
+            Self::PracticeMode => "Lesson Practice Mode",
             Self::Theme => "Theme",
         }
     }
@@ -95,6 +99,9 @@ impl SettingsPanel {
             SettingField::AIProvider => {
                 config.ai.provider.clone()
             }
+            SettingField::PracticeMode => {
+                config.lessons.practice_mode.clone()
+            }
             SettingField::Theme => {
                 config.theme.default_theme.clone()
             }
@@ -142,6 +149,16 @@ impl SettingsPanel {
             }
             SettingField::AIProvider => {
                 config.ai.provider = self.edit_buffer.clone();
+            }
+            SettingField::PracticeMode => {
+                // Accept "real" (or "r") for real-filesystem practice;
+                // anything else falls back to the safe simulated sandbox
+                let value = self.edit_buffer.trim().to_lowercase();
+                config.lessons.practice_mode = if value == "real" || value == "r" {
+                    "real".to_string()
+                } else {
+                    "simulated".to_string()
+                };
             }
             SettingField::Theme => {
                 config.theme.default_theme = self.edit_buffer.clone();
@@ -281,6 +298,37 @@ impl SettingsPanel {
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
+            Span::styled("  Lessons", theme.style_header()),
+        ]));
+
+        // Lesson practice mode field
+        let practice_mode = &config.lessons.practice_mode;
+        self.add_field_line(
+            &mut lines,
+            SettingField::PracticeMode,
+            "Practice",
+            if self.editing && self.selected_field == SettingField::PracticeMode {
+                &self.edit_buffer
+            } else {
+                practice_mode
+            },
+            theme,
+        );
+        let practice_note = if config.lessons.is_real() {
+            format!(
+                "    {}Lesson commands run for real in ~/ArcAcademy/playground",
+                icons::warning().content
+            )
+        } else {
+            format!(
+                "    {}\"simulated\" = safe sandbox, \"real\" = practice in ~/ArcAcademy/playground",
+                icons::hint().content
+            )
+        };
+        lines.push(Line::from(vec![Span::styled(practice_note, theme.style_dim())]));
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
             Span::styled("  Appearance", theme.style_header()),
         ]));
 
@@ -296,6 +344,16 @@ impl SettingsPanel {
             },
             theme,
         );
+
+        // List the valid theme names so typing one isn't a guessing game
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "    {}Themes: {}",
+                icons::hint().content,
+                Theme::all_names().join(", ")
+            ),
+            theme.style_dim(),
+        )]));
 
         lines.push(Line::from(""));
         lines.push(Line::from(""));

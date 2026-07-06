@@ -5,7 +5,9 @@
 
 pub mod command;
 pub mod education;
+pub mod guard;
 pub mod lesson;
+pub mod playground;
 pub mod session;
 pub mod context;
 pub mod types;
@@ -17,10 +19,12 @@ pub mod recommendation;
 
 pub use command::{Command, CommandAnalyzer, CommandCategory, DangerLevel};
 pub use education::{Educator, Explanation, LearningTip};
+pub use guard::{GuardVerdict, PlaygroundGuard, PLAYGROUND_DISPLAY};
 pub use lesson::{
     Lesson, LessonStep, StepType, LessonProgress, LessonLibrary,
-    LessonValidator, ValidationResult, Difficulty, CommandValidation,
+    LessonValidator, ValidationResult, Difficulty, CommandValidation, SetupFile,
 };
+pub use playground::Playground;
 pub use session::{Session, SessionState};
 pub use context::{Context, ContextDetector};
 pub use types::{Error, Result};

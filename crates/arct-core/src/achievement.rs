@@ -203,7 +203,7 @@ pub fn all_achievements() -> Vec<Achievement> {
             description: "Complete the Navigation Basics lesson. You can now find your way around!".to_string(),
             icon: "\u{f14e}", // Compass
             category: AchievementCategory::Lessons,
-            condition: UnlockCondition::CompleteLesson("nav_basics".to_string()),
+            condition: UnlockCondition::CompleteLesson("nav-basics".to_string()),
             points: 20,
         },
 
